@@ -3,8 +3,9 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import Shell from './components/Shell'
 import { Login, Register } from './views/Auth'
 import { useStore } from './store/useStore'
-import { useResolvedTheme, useThemeClass } from './lib/hooks'
+
 import Backdrop from './three/Backdrop'
+import { useThemeStore } from './theme/store'
 
 const Dashboard = lazy(() => import('./views/Dashboard'))
 const Settings = lazy(() => import('./views/Settings'))
@@ -30,7 +31,7 @@ export default function App() {
   const booting = useStore((state) => state.booting)
   const ready = useStore((state) => state.ready)
   const user = useStore((state) => state.user)
-  const theme = String(useStore((state) => state.prefs.theme ?? 'system'))
+  const themeBase = useThemeStore((state) => state.theme.base)
   const navigate = useNavigate()
   const toast = useStore((state) => state.toast)
 
@@ -45,8 +46,6 @@ export default function App() {
     return () => window.removeEventListener('2fauth:session-expired', onExpired)
   }, [navigate, toast])
 
-  useThemeClass(theme)
-  const resolved = useResolvedTheme(theme)
 
   useEffect(() => {
     void boot()
@@ -56,7 +55,7 @@ export default function App() {
 
   return (
     <>
-      <Backdrop light={resolved === 'light'} accent={resolved === 'light' ? '#2f7d68' : '#55e6c1'} />
+      <Backdrop light={themeBase === 'light'} />
       <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/register" element={user ? <Navigate to="/" replace /> : <Register />} />

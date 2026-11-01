@@ -68,8 +68,19 @@ type Config struct {
 	MailFromName   string
 	MailFromAddr   string
 
-	// SSO
+	// SSO (OpenID Connect)
+	//
+	// The OIDC_* values below are the *defaults* of the SSO configuration: the
+	// matching runtime settings (openid.*, editable by an administrator through
+	// the API) take precedence whenever they are present.
+	OpenIDEnabled      bool
+	OpenIDIssuer       string
+	OpenIDClientID     string
 	OpenIDClientSecret string
+	OpenIDScopes       string
+	OpenIDButtonLabel  string
+	OpenIDAutoRegister bool
+	OpenIDAutoRedirect bool
 	GithubClientSecret string
 
 	// Preferences defaults (USERPREF_DEFAULT__*)
@@ -103,6 +114,12 @@ const (
 var Locales = []string{
 	"bg", "zh-CN", "zh-TW", "da", "nl", "en", "fr", "de", "hi", "it", "ja", "ko", "pt-BR", "ru", "es-ES", "tr",
 }
+
+// Defaults of the OpenID Connect single sign-on configuration.
+const (
+	DefaultOpenIDScopes = "openid profile email"
+	DefaultOpenIDLabel  = "Sign in with SSO"
+)
 
 type prefDefault struct {
 	name     string
@@ -275,7 +292,25 @@ func Load(basePath string) *Config {
 	c.MailFromName = nullToEmpty(get("MAIL_FROM_NAME", ""))
 	c.MailFromAddr = nullToEmpty(get("MAIL_FROM_ADDRESS", ""))
 
-	c.OpenIDClientSecret = get("OPENID_CLIENT_SECRET", "")
+	c.OpenIDEnabled = envBool(get("OIDC_ENABLED", "false"))
+	c.OpenIDIssuer = strings.TrimRight(strings.TrimSpace(nullToEmpty(get("OIDC_ISSUER", ""))), "/")
+	c.OpenIDClientID = nullToEmpty(get("OIDC_CLIENT_ID", ""))
+	// OIDC_CLIENT_SECRET is the current name; OPENID_CLIENT_SECRET is kept as a
+	// fallback for .env files written for 2FAuth v9.
+	c.OpenIDClientSecret = get("OIDC_CLIENT_SECRET", "")
+	if c.OpenIDClientSecret == "" {
+		c.OpenIDClientSecret = get("OPENID_CLIENT_SECRET", "")
+	}
+	c.OpenIDScopes = strings.TrimSpace(get("OIDC_SCOPES", DefaultOpenIDScopes))
+	if c.OpenIDScopes == "" {
+		c.OpenIDScopes = DefaultOpenIDScopes
+	}
+	c.OpenIDButtonLabel = strings.TrimSpace(get("OIDC_BUTTON_LABEL", DefaultOpenIDLabel))
+	if c.OpenIDButtonLabel == "" {
+		c.OpenIDButtonLabel = DefaultOpenIDLabel
+	}
+	c.OpenIDAutoRegister = envBool(get("OIDC_AUTO_REGISTER", "true"))
+	c.OpenIDAutoRedirect = envBool(get("OIDC_AUTO_REDIRECT", "false"))
 	c.GithubClientSecret = get("GITHUB_CLIENT_SECRET", "")
 
 	c.Locales = Locales

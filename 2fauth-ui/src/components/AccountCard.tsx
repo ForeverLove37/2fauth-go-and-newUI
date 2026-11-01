@@ -10,33 +10,30 @@ import {
   otpProgress,
   remainingSeconds,
 } from '../lib/format'
+import { wasDragged } from '../stage/Stage3D'
 import Icon from './Icon'
 
 interface CardProps {
   account: Account
-  index: number
-  step: number
-  radius: number
   selected: boolean
   now: number
   dots: boolean
   showNext: boolean
+  compact?: boolean
   onSelect: () => void
   onCopy: (message: string) => void
   onFavorite: () => void
   onOpen: () => void
 }
 
-/** One account rendered as a glass card floating on the orbit. */
+/** One account rendered as a glass card. Its position is owned by the parent (3D stage or grid). */
 export function AccountCard({
   account,
-  index,
-  step,
-  radius,
   selected,
   now,
   dots,
   showNext,
+  compact = false,
   onSelect,
   onCopy,
   onFavorite,
@@ -47,29 +44,44 @@ export function AccountCard({
   const remaining = remainingSeconds(account, now)
   const progress = otpProgress(account, now)
   const isHotp = account.otp_type === 'hotp'
+  const hidden = dots && !revealed
 
-  const style = useMemo(
-    () =>
-      ({
-        '--i': index,
-        '--step': `${step}deg`,
-        '--radius': `${radius}px`,
-      }) as React.CSSProperties,
-    [index, step, radius],
-  )
+  const flags = useMemo(() => {
+    const list: { text: string; tone?: 'hot' | 'warn' }[] = []
+    if (account.is_favorite) list.push({ text: 'pinned', tone: 'hot' })
+    if (account.is_borrowed) list.push({ text: `shared · ${account.borrowed_by ?? ''}`.trim() })
+    else if (account.is_shared_with_all) list.push({ text: 'everyone' })
+    else if (account.is_shared) list.push({ text: 'shared' })
+    if (isHotp) list.push({ text: `#${account.counter ?? 0}`, tone: 'warn' })
+    return list
+  }, [account, isHotp])
 
-  async function copy() {
+  async function copy(event: React.MouseEvent) {
+    event.stopPropagation()
     if (!code) return
     const ok = await copyText(code)
-    onCopy(ok ? 'Code copied' : 'Copy failed')
+    onCopy(ok ? '已复制验证码' : '复制失败')
+  }
+
+  function select(event: React.MouseEvent) {
+    if (wasDragged(event.currentTarget)) return
+    onSelect()
   }
 
   return (
     <article
-      className={`orbit-card${selected ? ' selected' : ' dim'}`}
-      style={style}
-      onClick={onSelect}
-      onDoubleClick={onOpen}
+      className={`orbit-card${selected ? ' selected' : ' dim'}${compact ? ' compact' : ''}`}
+      onClick={select}
+      onDoubleClick={(event) => {
+        if (wasDragged(event.currentTarget)) return
+        onOpen()
+      }}
+      tabIndex={0}
+      role="button"
+      aria-label={`${accountLabel(account)} — ${hidden ? 'code hidden' : code}`}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') onSelect()
+      }}
     >
       <div className="card-top">
         <div className="card-avatar">
@@ -81,20 +93,39 @@ export function AccountCard({
         </div>
       </div>
 
-      <div className="card-flags">
-        {account.is_favorite && <span className="flag hot">pinned</span>}
-        {account.is_borrowed && <span className="flag">shared · {account.borrowed_by}</span>}
-        {account.is_shared_with_all && <span className="flag">everyone</span>}
-        {!account.is_borrowed && account.is_shared && !account.is_shared_with_all && (
-          <span className="flag">shared</span>
+      {flags.length > 0 && (
+        <div className="card-flags">
+          {flags.map((flag) => (
+            <span key={flag.text} className={`flag${flag.tone ? ` ${flag.tone}` : ''}`}>
+              {flag.text}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="card-otp">
+        <button className={`otp-digits${hidden ? ' dots' : ''}`} onClick={copy} title="点击复制">
+          {displayCode(account, dots, revealed)}
+        </button>
+        {!isHotp && (
+          <div className="otp-meta">
+            <div className="ring" style={{ '--progress': 1 - progress } as React.CSSProperties}>
+              <b>{remaining}</b>
+            </div>
+          </div>
         )}
-        {isHotp && <span className="flag warn">counter {account.counter ?? 0}</span>}
       </div>
+
+      {showNext && !isHotp && account.otp?.next_password && !compact && (
+        <div className="card-next">
+          next <span className="mono">{hidden ? '••••••' : account.otp.next_password}</span>
+        </div>
+      )}
 
       <div className="card-actions">
         <button
           className={`icon-btn${account.is_favorite ? ' on' : ''}`}
-          title="Pin"
+          title="置顶"
           onClick={(event) => {
             event.stopPropagation()
             onFavorite()
@@ -102,20 +133,10 @@ export function AccountCard({
         >
           <Icon name={account.is_favorite ? 'star-filled' : 'star'} size={14} />
         </button>
-        <button
-          className="icon-btn"
-          title="Details"
-          onClick={(event) => {
-            event.stopPropagation()
-            onOpen()
-          }}
-        >
-          <Icon name="sliders" size={14} />
-        </button>
         {dots && (
           <button
             className="icon-btn"
-            title="Reveal"
+            title={revealed ? '隐藏' : '显示'}
             onClick={(event) => {
               event.stopPropagation()
               setRevealed((value) => !value)
@@ -124,32 +145,17 @@ export function AccountCard({
             <Icon name={revealed ? 'eye-off' : 'eye'} size={14} />
           </button>
         )}
-      </div>
-
-      <div className="card-otp">
         <button
-          className={`otp-digits${dots && !revealed ? ' dots' : ''}`}
+          className="icon-btn"
+          title="详情"
           onClick={(event) => {
             event.stopPropagation()
-            void copy()
+            onOpen()
           }}
-          title="Copy the code"
         >
-          {displayCode(account, dots, revealed)}
+          <Icon name="sliders" size={14} />
         </button>
-        {!isHotp && (
-          <div className="otp-meta">
-            <div className="ring" style={{ '--progress': 1 - progress } as React.CSSProperties}>
-              <b>{remaining}</b>
-            </div>
-            {showNext && account.otp?.next_password && dotNext(account.otp.next_password, dots && !revealed)}
-          </div>
-        )}
       </div>
     </article>
   )
-}
-
-function dotNext(next: string, hidden: boolean) {
-  return <span className="mono" style={{ opacity: 0.55 }}>next {hidden ? '••••••' : next}</span>
 }

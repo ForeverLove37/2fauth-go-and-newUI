@@ -3,11 +3,11 @@ import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import type { ApiError, ManagedUser, PersonalAccessToken, WebAuthnCredential } from '../api/types'
 import Icon from '../components/Icon'
+import ThemeEditor from './ThemeEditor'
 import { useStore } from '../store/useStore'
 
-type Tab = 'options' | 'account' | 'security' | 'admin'
+type Tab = 'theme' | 'options' | 'account' | 'security' | 'admin'
 
-const algorithms = ['system', 'dark', 'light']
 const languages = ['browser', 'en', 'fr', 'de', 'es-ES', 'it', 'nl', 'pt-BR', 'ru', 'zh-CN', 'zh-TW', 'ja', 'ko', 'tr', 'bg', 'da', 'hi']
 
 /** User preferences, account settings, security and administration. */
@@ -17,26 +17,35 @@ export default function Settings() {
   const locked = useStore((state) => state.locked)
   const setPreference = useStore((state) => state.setPreference)
   const [params, setParams] = useSearchParams()
-  const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) ?? 'options')
+  const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) ?? 'theme')
 
   return (
     <div className="stage" style={{ overflow: 'auto' }}>
       <div style={{ padding: '18px 26px 40px', maxWidth: 1020, margin: '0 auto', width: '100%' }}>
         <div className="tabs" style={{ marginBottom: 20 }}>
-          {(['options', 'account', 'security', ...(user?.is_admin ? (['admin'] as Tab[]) : [])] as Tab[]).map((item) => (
+          {(['theme', 'options', 'account', 'security', ...(user?.is_admin ? (['admin'] as Tab[]) : [])] as Tab[]).map((item) => (
             <button
               key={item}
               className={tab === item ? 'active' : ''}
               onClick={() => {
                 setTab(item)
-                setParams(item === 'options' ? {} : { tab: item })
+                setParams(item === 'theme' ? {} : { tab: item })
               }}
             >
-              {item === 'options' ? 'Options' : item === 'account' ? 'Account' : item === 'security' ? 'Security' : 'Administration'}
+              {item === 'theme'
+                ? '外观'
+                : item === 'options'
+                  ? '选项'
+                  : item === 'account'
+                    ? '账号'
+                    : item === 'security'
+                      ? '安全'
+                      : '管理'}
             </button>
           ))}
         </div>
 
+        {tab === 'theme' && <ThemeEditor />}
         {tab === 'options' && <OptionsTab prefs={prefs} locked={locked} setPreference={setPreference} />}
         {tab === 'account' && <AccountTab />}
         {tab === 'security' && <SecurityTab />}
@@ -89,29 +98,14 @@ function OptionsTab({
     <div className="panel">
       <div className="panel-head">
         <div>
-          <h2>Appearance & behaviour</h2>
-          <p>Preferences are stored per user and applied instantly.</p>
+          <h2>行为与偏好</h2>
+          <p>偏好按用户保存在服务端；外观请在「外观」页调整。</p>
         </div>
       </div>
       <div className="panel-body">
         <div className="row">
           <div className="field">
-            <label>Theme</label>
-            <select
-              className="select"
-              value={String(prefs.theme ?? 'system')}
-              disabled={isLocked('theme')}
-              onChange={(event) => void setPreference('theme', event.target.value)}
-            >
-              {algorithms.map((theme) => (
-                <option key={theme} value={theme}>
-                  {theme}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label>Language</label>
+            <label>语言 / Language</label>
             <select
               className="select"
               value={String(prefs.lang ?? 'browser')}

@@ -1,5 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore'
+import { presets } from '../theme/presets'
+import { useThemeStore } from '../theme/store'
 import Icon from './Icon'
 
 function initials(name: string): string {
@@ -14,25 +16,24 @@ function initials(name: string): string {
 /** Application frame: top bar, routed content and toasts. */
 export default function Shell() {
   const user = useStore((state) => state.user)
-  const prefs = useStore((state) => state.prefs)
   const config = useStore((state) => state.config)
   const logout = useStore((state) => state.logout)
-  const setPreference = useStore((state) => state.setPreference)
   const toasts = useStore((state) => state.toasts)
   const dismiss = useStore((state) => state.dismiss)
   const navigate = useNavigate()
-
-  const theme = String(prefs.theme ?? 'system')
+  const theme = useThemeStore((state) => state.theme)
+  const usePreset = useThemeStore((state) => state.usePreset)
 
   async function signOut() {
     await logout()
     navigate('/login', { replace: true })
   }
 
-  async function cycleTheme() {
-    const order = ['system', 'dark', 'light']
-    const next = order[(order.indexOf(theme) + 1) % order.length]
-    await setPreference('theme', next)
+  function cycleTheme() {
+    const index = presets.findIndex((preset) => preset.id === theme.id)
+    const next = presets[(index + 1) % presets.length]
+    usePreset(next.id)
+    navigate('/settings?tab=theme')
   }
 
   return (
@@ -64,7 +65,7 @@ export default function Shell() {
           <div className="spacer" />
 
           <div className="flex">
-            <button className="btn icon ghost" onClick={cycleTheme} title={`Theme: ${theme}`}>
+            <button className="btn icon ghost" onClick={cycleTheme} title={`主题：${theme.name}（点击切换下一套）`}>
               <Icon name="eye" size={15} />
             </button>
             <button className="avatar" title={user ? `${user.name} · ${user.email}` : ''} onClick={() => navigate('/settings')}>

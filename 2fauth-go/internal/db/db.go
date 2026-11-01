@@ -274,6 +274,19 @@ func (d *DB) schema() []string {
 		`CREATE INDEX IF NOT EXISTS oauth_access_tokens_user_id_idx ON oauth_access_tokens (user_id)`,
 		`CREATE INDEX IF NOT EXISTS oauth_access_tokens_token_hash_idx ON oauth_access_tokens (token_hash)`,
 
+		`CREATE TABLE IF NOT EXISTS oauth_identities (
+			id ` + pk + `,
+			user_id BIGINT NOT NULL,
+			provider VARCHAR(40) NOT NULL,
+			subject VARCHAR(255) NOT NULL,
+			email VARCHAR(255) NULL,
+			created_at TIMESTAMP NULL,
+			updated_at TIMESTAMP NULL,
+			CONSTRAINT oauth_identities_user_id_foreign FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS oauth_identities_provider_subject_unique ON oauth_identities (provider, subject)`,
+		`CREATE INDEX IF NOT EXISTS oauth_identities_user_id_idx ON oauth_identities (user_id)`,
+
 		`CREATE TABLE IF NOT EXISTS migrations (
 			id INTEGER PRIMARY KEY,
 			migration VARCHAR(255) NOT NULL,
