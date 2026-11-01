@@ -1,23 +1,39 @@
-# dependencies & toolchains (huge, regenerable)
-node_modules/
-.npm-cache/
+# Local toolchains and temporary probes
 .toolchain/
 .probe/
+.npm-cache/
 
-# build output
+# JavaScript dependencies and generated bundles
+**/node_modules/
 2fauth-ui/dist/
+2fauth-ui/node_modules/.cache/
 
-# upstream checkouts used as reference only
+# Local upstream/reference checkouts (not part of this repository)
 2FAuth/
 2FAuth-Components/
 spec/
 ui-manager.zip
 
-# runtime deployment data (contains APP_KEY, database, uploaded icons)
+# Local environment and secrets. Keep checked-in example files.
+.env
+.env.local
+.env.*.local
+
+# Runtime state: databases, uploaded icons, logs, and local deployment dirs
 run/
 run2/
-*.sqlite
-*.sqlite-journal
-*.sqlite-wal
-*.log
-.env
+**/*.sqlite
+**/*.sqlite-journal
+**/*.sqlite-wal
+**/*.db
+**/*.log
+
+# Compiled application binaries
+2fauth-go/2fauth
+2fauth-go/2fauth.exe
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
