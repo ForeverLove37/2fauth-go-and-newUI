@@ -62,6 +62,7 @@ async function main() {
   const { useStore } = await import('../src/store/useStore')
   const { useThemeStore } = await import('../src/theme/store')
   const Dashboard = (await import('../src/views/Dashboard')).default
+  const Settings = (await import('../src/views/Settings')).default
   const ThemeEditor = (await import('../src/views/ThemeEditor')).default
   const { Login } = await import('../src/views/Auth')
 
@@ -86,6 +87,32 @@ async function main() {
       }
     } else if (url.includes('/socialite/redirect/openid')) {
       payload = { url: 'https://idp.example.com/auth?state=xyz' }
+    } else if (url.includes('/api/v1/sso/settings')) {
+      payload = {
+        enabled: true,
+        issuer: 'https://keycloak.example.com/realms/main',
+        client_id: '2fauth',
+        client_secret_set: true,
+        scopes: 'openid profile email',
+        label: '用公司账号登录',
+        auto_register: true,
+        auto_redirect: false,
+        redirect_uri: 'http://localhost/socialite/callback/openid',
+      }
+    } else if (url.includes('/api/v1/sso/presets')) {
+      payload = [{ id: 'keycloak', name: 'Keycloak', issuer: 'https://keycloak.example.com/realms/{realm}', scopes: 'openid profile email', hint: 'realm 必填' }]
+    } else if (url.includes('/api/v1/sso/keycloak-client')) {
+      payload = {
+        filename: 'keycloak-2fauth.json',
+        format: 'client',
+        content: '{"clientId":"2fauth"}',
+        secret_generated: true,
+        notice: 'secret generated',
+      }
+    } else if (url.includes('/api/v1/users')) {
+      payload = { info: [] }
+    } else if (url.includes('/api/v1/settings')) {
+      payload = []
     }
     return {
       ok: true,
@@ -182,6 +209,37 @@ async function main() {
   )
   await tick(150)
   assert('sso_error is explained on the login page', errorHost.textContent?.includes('SSO 会话已失效') === true)
+
+  // settings screen: every tab renders, the SSO panel loads its settings
+  const settingsHost = window.document.createElement('div')
+  window.document.body.appendChild(settingsHost)
+  createRoot(settingsHost).render(
+    createElement(MemoryRouter, { initialEntries: ['/settings'] }, createElement(Settings)),
+  )
+  await tick(180)
+  const tabLabels = [...settingsHost.querySelectorAll('.tabs button')].map((element) => element.textContent ?? '')
+  assert('settings tabs include 外观 / 单点登录 / 管理', ['外观', '单点登录', '管理'].every((label) => tabLabels.includes(label)))
+
+  const ssoTab = [...settingsHost.querySelectorAll('.tabs button')].find((element) =>
+    element.textContent?.includes('单点登录'),
+  ) as HTMLButtonElement | undefined
+  ssoTab?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(200)
+  const issuerInput = [...settingsHost.querySelectorAll('input')].find((element) =>
+    (element as HTMLInputElement).placeholder.includes('keycloak.example.com'),
+  ) as HTMLInputElement | undefined
+  assert('SSO panel shows the issuer field', Boolean(issuerInput))
+  assert('SSO panel preloads the stored issuer', issuerInput?.value === 'https://keycloak.example.com/realms/main')
+  assert('SSO panel lists provider presets', settingsHost.textContent?.includes('Keycloak') === true)
+  assert('SSO panel has the Keycloak export buttons', settingsHost.textContent?.includes('Client JSON') === true)
+
+  // a light preset must switch the document theme
+  const paperSwatch = [...editorHost.querySelectorAll('.theme-swatch')].find((element) =>
+    element.textContent?.includes('极简白'),
+  ) as HTMLButtonElement | undefined
+  paperSwatch?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(120)
+  assert('light preset sets data-theme="light"', window.document.documentElement.dataset.theme === 'light')
 
   assert('no runtime errors', errors.length === 0)
   if (errors.length) console.error(errors.slice(0, 5))

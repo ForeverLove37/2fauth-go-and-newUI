@@ -82,6 +82,10 @@ verifier in an encrypted `oidc_tx` cookie and redirects to the provider;
 account and creates the session (`418`/`419` semantics unchanged). Failures land
 on `/login?sso_error=<code>` and the panel explains each code.
 
+To try the flow without a real provider, run the bundled fake IdP
+(`python3 scripts/fake-idp.py`, listens on `http://127.0.0.1:9100`) and point the
+issuer at it.
+
 **Keycloak in one step** — the admin panel (or the API) generates a client file
 that Keycloak imports as-is:
 
