@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke": "esbuild scripts/smoke.ts --bundle --platform=node --format=cjs --external:jsdom --outfile=node_modules/.cache/smoke.cjs --log-level=warning && node node_modules/.cache/smoke.cjs"
   },
   "dependencies": {
     "@react-three/drei": "^9.114.3",
@@ -23,6 +24,7 @@
     "@types/react-dom": "^18.3.0",
     "@types/three": "^0.169.0",
     "@vitejs/plugin-react": "^4.3.2",
+    "jsdom": "^25.0.1",
     "typescript": "^5.6.2",
     "vite": "^5.4.8"
   }

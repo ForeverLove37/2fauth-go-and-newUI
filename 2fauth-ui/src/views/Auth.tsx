@@ -1,7 +1,21 @@
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import Icon from '../components/Icon'
 import { useStore } from '../store/useStore'
+import { sso, type SsoConfig } from '../api/sso'
 import type { ApiError } from '../api/types'
+
+const ssoErrors: Record<string, string> = {
+  cancelled: '已取消 SSO 登录',
+  state: 'SSO 会话已失效，请重试',
+  provider: '无法连接身份提供方，请检查 Issuer 配置',
+  exchange: '无法用授权码换取令牌，请检查 client secret 与回调地址',
+  userinfo: '身份提供方未返回用户信息',
+  email: '身份提供方未返回邮箱地址',
+  register_disabled: '本实例已关闭注册，无法自动创建账号',
+  account: '无法匹配到账号，请联系管理员',
+  server: '服务器内部错误',
+}
 
 function useSubmit() {
   const [busy, setBusy] = useState(false)
@@ -35,6 +49,41 @@ export function Login() {
   const { busy, error, fields, run } = useSubmit()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [params] = useSearchParams()
+  const [ssoConfig, setSsoConfig] = useState<SsoConfig | null>(null)
+  const [ssoError, setSsoError] = useState('')
+
+  useEffect(() => {
+    void sso
+      .config()
+      .then((loaded) => setSsoConfig(loaded))
+      .catch(() => setSsoConfig(null))
+  }, [])
+
+  useEffect(() => {
+    const code = params.get('sso_error')
+    if (code) setSsoError(ssoErrors[code] ?? `SSO 登录失败（${code}）`)
+  }, [params])
+
+  async function startSso() {
+    setSsoError('')
+    try {
+      const url = await sso.start()
+      window.location.assign(url)
+    } catch (caught) {
+      setSsoError((caught as Error).message)
+    }
+  }
+
+  // automatic redirect when the instance is configured for it
+  useEffect(() => {
+    if (ssoConfig?.enabled && ssoConfig.auto_redirect && !params.get('sso_error')) {
+      void startSso()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ssoConfig?.enabled, ssoConfig?.auto_redirect])
+
+  const ssoOnly = Boolean(config?.appSettings?.useSsoOnly) && Boolean(ssoConfig?.enabled)
 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
@@ -51,8 +100,8 @@ export function Login() {
       <form className="auth-card" onSubmit={submit}>
         <div className="auth-hero">
           <div className="brand-mark">2F</div>
-          <h1>Welcome back</h1>
-          <p className="sub">Sign in to your {config?.appName ?? '2FAuth'} vault</p>
+          <h1>欢迎回来</h1>
+          <p className="sub">登录你的 {config?.appName ?? '2FAuth'} 保险库</p>
         </div>
 
         <div className="field">
@@ -85,10 +134,23 @@ export function Login() {
         </div>
 
         {error && <p className="error-text">{error}</p>}
+        {ssoError && <p className="error-text">{ssoError}</p>}
 
-        <button className="btn primary" type="submit" disabled={busy}>
-          {busy ? 'Signing in…' : 'Sign in'}
-        </button>
+        {!ssoOnly && (
+          <button className="btn primary" type="submit" disabled={busy}>
+            {busy ? '正在登录…' : '登录'}
+          </button>
+        )}
+
+        {ssoConfig?.enabled && (
+          <>
+            <div className="auth-divider">或</div>
+            <button type="button" className="btn sso-btn" onClick={() => void startSso()}>
+              <Icon name="shield" size={15} />
+              {ssoConfig.label || '使用 SSO 登录'}
+            </button>
+          </>
+        )}
 
         {registrationOpen && (
           <p className="auth-switch">
@@ -136,8 +198,8 @@ export function Register() {
       <form className="auth-card" onSubmit={submit}>
         <div className="auth-hero">
           <div className="brand-mark">2F</div>
-          <h1>Create your account</h1>
-          <p className="sub">The first account becomes the administrator</p>
+          <h1>创建账号</h1>
+          <p className="sub">第一个注册的账号将成为管理员</p>
         </div>
 
         <div className="field">

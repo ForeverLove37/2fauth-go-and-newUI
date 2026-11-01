@@ -4,9 +4,10 @@ import { api } from '../api/client'
 import type { ApiError, ManagedUser, PersonalAccessToken, WebAuthnCredential } from '../api/types'
 import Icon from '../components/Icon'
 import ThemeEditor from './ThemeEditor'
+import SsoSettingsPanel from '../components/SsoSettingsPanel'
 import { useStore } from '../store/useStore'
 
-type Tab = 'theme' | 'options' | 'account' | 'security' | 'admin'
+type Tab = 'theme' | 'options' | 'account' | 'security' | 'sso' | 'admin'
 
 const languages = ['browser', 'en', 'fr', 'de', 'es-ES', 'it', 'nl', 'pt-BR', 'ru', 'zh-CN', 'zh-TW', 'ja', 'ko', 'tr', 'bg', 'da', 'hi']
 
@@ -23,7 +24,7 @@ export default function Settings() {
     <div className="stage" style={{ overflow: 'auto' }}>
       <div style={{ padding: '18px 26px 40px', maxWidth: 1020, margin: '0 auto', width: '100%' }}>
         <div className="tabs" style={{ marginBottom: 20 }}>
-          {(['theme', 'options', 'account', 'security', ...(user?.is_admin ? (['admin'] as Tab[]) : [])] as Tab[]).map((item) => (
+          {(['theme', 'options', 'account', 'security', ...(user?.is_admin ? (['sso', 'admin'] as Tab[]) : [])] as Tab[]).map((item) => (
             <button
               key={item}
               className={tab === item ? 'active' : ''}
@@ -40,7 +41,9 @@ export default function Settings() {
                     ? '账号'
                     : item === 'security'
                       ? '安全'
-                      : '管理'}
+                      : item === 'sso'
+                        ? '单点登录'
+                        : '管理'}
             </button>
           ))}
         </div>
@@ -49,6 +52,7 @@ export default function Settings() {
         {tab === 'options' && <OptionsTab prefs={prefs} locked={locked} setPreference={setPreference} />}
         {tab === 'account' && <AccountTab />}
         {tab === 'security' && <SecurityTab />}
+        {tab === 'sso' && <SsoSettingsPanel />}
         {tab === 'admin' && <AdminTab />}
       </div>
     </div>

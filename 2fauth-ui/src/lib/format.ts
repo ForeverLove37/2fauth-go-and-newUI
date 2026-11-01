@@ -48,6 +48,7 @@ export async function copyText(text: string): Promise<boolean> {
     await navigator.clipboard.writeText(text)
     return true
   } catch {
+    if (typeof document.execCommand !== 'function') return false
     const area = document.createElement('textarea')
     area.value = text
     area.style.position = 'fixed'
