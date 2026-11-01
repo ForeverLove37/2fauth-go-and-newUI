@@ -1,0 +1,23 @@
+# dependencies & toolchains (huge, regenerable)
+node_modules/
+.npm-cache/
+.toolchain/
+.probe/
+
+# build output
+2fauth-ui/dist/
+
+# upstream checkouts used as reference only
+2FAuth/
+2FAuth-Components/
+spec/
+ui-manager.zip
+
+# runtime deployment data (contains APP_KEY, database, uploaded icons)
+run/
+run2/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.log
+.env
