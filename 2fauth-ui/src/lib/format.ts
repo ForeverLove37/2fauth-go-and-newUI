@@ -1,4 +1,5 @@
 import type { Account } from '../api/types'
+import { t } from '../i18n'
 
 /** Seconds left in the current TOTP window. */
 export function remainingSeconds(account: Account, now: number): number {
@@ -32,13 +33,15 @@ export function initials(account: Account): string {
 
 /** Human readable label of an account. */
 export function accountLabel(account: Account): string {
-  return account.service || account.account || `Account #${account.id}`
+  return account.service || account.account || t('Account #{id}', { id: account.id })
 }
 
 /** Secondary line of an account. */
 export function accountSubLabel(account: Account): string {
   if (account.service && account.account) return account.account
-  if (account.is_borrowed) return `shared by ${account.borrowed_by ?? 'another user'}`
+  if (account.is_borrowed) {
+    return t('Shared by {name}', { name: account.borrowed_by ?? t('another user') })
+  }
   return account.otp_type.toUpperCase()
 }
 

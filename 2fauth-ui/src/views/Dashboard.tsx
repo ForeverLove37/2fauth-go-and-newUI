@@ -5,29 +5,41 @@ import AccountModal from '../components/AccountModal'
 import { AccountCard } from '../components/AccountCard'
 import { GroupsModal, ImportExportModal } from '../components/Transfer'
 import Icon from '../components/Icon'
+import { useT } from '../i18n'
 import { accountLabel, accountSubLabel, copyText, displayCode, initials, remainingSeconds } from '../lib/format'
 import { usePolling, useTick } from '../lib/hooks'
 import Stage3D from '../stage/Stage3D'
 import type { StageLayout } from '../stage/layouts'
 import { useStore } from '../store/useStore'
 import { useThemeStore } from '../theme/store'
+import type { BackgroundStyle } from '../theme/types'
 
-type ViewMode = StageLayout | 'hybrid' | 'grid' | 'list'
+type ViewMode = StageLayout | 'grid' | 'list'
 
 const MODE_KEY = '2fauth.mode.v1'
 const ROTATE_KEY = '2fauth.autorotate.v1'
 
 const modeMeta: { id: ViewMode; label: string; icon: 'orbit' | 'grid' | 'share' | 'qr' | 'sliders' | 'eye' | 'copy' }[] = [
-  { id: 'orbit', label: '环绕', icon: 'orbit' },
-  { id: 'helix', label: '螺旋', icon: 'share' },
-  { id: 'wall', label: '卡墙', icon: 'grid' },
-  { id: 'sphere', label: '球面', icon: 'eye' },
-  { id: 'hybrid', label: '混合', icon: 'qr' },
-  { id: 'grid', label: '网格', icon: 'sliders' },
-  { id: 'list', label: '列表', icon: 'copy' },
+  { id: 'orbit', label: 'Orbit', icon: 'orbit' },
+  { id: 'helix', label: 'Helix', icon: 'share' },
+  { id: 'wall', label: 'Wall', icon: 'grid' },
+  { id: 'sphere', label: 'Sphere', icon: 'eye' },
+  { id: 'grid', label: 'Grid', icon: 'sliders' },
+  { id: 'list', label: 'List', icon: 'copy' },
 ]
 
-const modes: ViewMode[] = ['orbit', 'helix', 'wall', 'sphere', 'hybrid', 'grid', 'list']
+const modes: ViewMode[] = ['orbit', 'helix', 'wall', 'sphere', 'grid', 'list']
+
+const sceneryOrder: BackgroundStyle[] = ['grid', 'stars', 'nebula', 'waves', 'aurora', 'bokeh', 'minimal']
+const sceneryLabel: Record<BackgroundStyle, string> = {
+  grid: 'Grid',
+  stars: 'Starfield',
+  nebula: 'Nebula',
+  waves: 'Waves',
+  aurora: 'Aurora',
+  bokeh: 'Bokeh',
+  minimal: 'Minimal',
+}
 
 function loadMode(): ViewMode {
   const stored = localStorage.getItem(MODE_KEY) as ViewMode | null
@@ -35,8 +47,9 @@ function loadMode(): ViewMode {
   return 'orbit'
 }
 
-/** The account panel: several 3D layouts plus hybrid and 2D views sharing the same cards. */
+/** The account panel: four 3D layouts plus 2D views sharing the same cards. */
 export default function Dashboard() {
+  const t = useT()
   const accounts = useStore((state) => state.accounts)
   const groups = useStore((state) => state.groups)
   const prefs = useStore((state) => state.prefs)
@@ -47,6 +60,8 @@ export default function Dashboard() {
   const loadGroups = useStore((state) => state.loadGroups)
   const toggleFavorite = useStore((state) => state.toggleFavorite)
   const themeAutoRotate = useThemeStore((state) => state.theme.motion.autoRotate)
+  const background = useThemeStore((state) => state.theme.background)
+  const patchBackground = useThemeStore((state) => state.patchBackground)
 
   const now = useTick(250)
   const [mode, setMode] = useState<ViewMode>(() => loadMode())
@@ -60,6 +75,8 @@ export default function Dashboard() {
   const [creating, setCreating] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
   const [groupsOpen, setGroupsOpen] = useState(false)
+  const [draft, setDraft] = useState<number[] | null>(null)
+  const dragRef = useRef<{ id: number; startX: number; startY: number; moved: boolean } | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
   const dots = Boolean(prefs.showOtpAsDot)
@@ -93,7 +110,17 @@ export default function Dashboard() {
     })
   }, [accounts, groupFilter, query])
 
+  // the grid is reorderable, so it renders from a draft order while dragging
+  const ordered = useMemo(() => {
+    if (!draft) return visible
+    const byId = new Map(visible.map((account) => [account.id, account]))
+    const result = draft.map((id) => byId.get(id)).filter((account): account is Account => Boolean(account))
+    for (const account of visible) if (!draft.includes(account.id)) result.push(account)
+    return result
+  }, [draft, visible])
+
   const selected = visible.find((account) => account.id === selectedId) ?? visible[0] ?? null
+  const canReorder = mode === 'grid' && groupFilter === 'all' && query.trim() === '' && visible.length > 1
 
   useEffect(() => {
     if (selected && selected.id !== selectedId) select(selected.id)
@@ -102,7 +129,10 @@ export default function Dashboard() {
   async function copy(account: Account | null) {
     if (!account?.otp?.password) return
     const ok = await copyText(account.otp.password)
-    toast(ok ? 'success' : 'error', ok ? `已复制 ${accountLabel(account)} 验证码` : '复制失败')
+    toast(
+      ok ? 'success' : 'error',
+      ok ? t('Code copied for {name}', { name: accountLabel(account) }) : t('Could not copy the code'),
+    )
   }
 
   async function hotp(account: Account | null) {
@@ -110,12 +140,77 @@ export default function Dashboard() {
     try {
       const payload = await api.otp(account.id)
       await copyText(payload.password)
-      toast('success', `新计数器验证码 ${payload.password}`)
+      toast('success', t('New counter code {code}', { code: payload.password }))
       await loadAccounts(true)
     } catch {
-      toast('error', '无法生成新验证码')
+      toast('error', t('Could not generate a new code'))
     }
   }
+
+  function cycleScenery() {
+    const current = background?.style ?? 'grid'
+    const next = sceneryOrder[(sceneryOrder.indexOf(current) + 1) % sceneryOrder.length]
+    patchBackground({ style: next })
+  }
+
+  // drag to reorder the grid, like moving icons on a home screen
+  function beginDrag(event: React.PointerEvent, account: Account) {
+    if (!canReorder || (event.pointerType === 'mouse' && event.button !== 0)) return
+    dragRef.current = { id: account.id, startX: event.clientX, startY: event.clientY, moved: false }
+    setDraft(visible.map((item) => item.id))
+  }
+
+  useEffect(() => {
+    if (!draft) return
+
+    function onMove(event: PointerEvent) {
+      const drag = dragRef.current
+      if (!drag) return
+      if (!drag.moved && Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY) < 8) return
+      drag.moved = true
+      const target = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest('[data-account-id]') as HTMLElement | null
+      if (!target) return
+      const targetId = Number(target.dataset.accountId)
+      if (!targetId || targetId === drag.id) return
+      setDraft((current) => {
+        if (!current) return current
+        const from = current.indexOf(drag.id)
+        const to = current.indexOf(targetId)
+        if (from < 0 || to < 0 || from === to) return current
+        const next = [...current]
+        next.splice(from, 1)
+        next.splice(to, 0, drag.id)
+        return next
+      })
+    }
+
+    async function onUp() {
+      const drag = dragRef.current
+      dragRef.current = null
+      const order = draft
+      setDraft(null)
+      if (!drag?.moved || !order) return
+      try {
+        await api.reorderAccounts(order)
+        toast('success', t('New order saved'))
+      } catch {
+        toast('error', t('Could not save the new order'))
+      } finally {
+        void loadAccounts(true)
+      }
+    }
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [draft, loadAccounts, toast, t])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -182,19 +277,20 @@ export default function Dashboard() {
   )
 
   const is3D = mode === 'orbit' || mode === 'helix' || mode === 'wall' || mode === 'sphere'
+  const dragging = draft !== null && dragRef.current?.moved === true
 
   return (
     <div className="stage">
       <div className="stage-inner">
         <div className="chips-bar">
           <button className={`chip${groupFilter === 'all' ? ' active' : ''}`} onClick={() => setGroupFilter('all')}>
-            全部 <span className="count">{accounts.length}</span>
+            {t('All')} <span className="count">{accounts.length}</span>
           </button>
           <button
             className={`chip${groupFilter === 'favorites' ? ' active' : ''}`}
             onClick={() => setGroupFilter('favorites')}
           >
-            <Icon name="star" size={13} /> 置顶{' '}
+            <Icon name="star" size={13} /> {t('Pinned')}{' '}
             <span className="count">{accounts.filter((account) => account.is_favorite).length}</span>
           </button>
           {groups
@@ -214,7 +310,7 @@ export default function Dashboard() {
               <Icon name="search" size={14} />
               <input
                 ref={searchRef}
-                placeholder="搜索账号"
+                placeholder={t('Search accounts')}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
               />
@@ -223,7 +319,7 @@ export default function Dashboard() {
         </div>
 
         <div className="view-bar">
-          <div className="segmented" role="tablist" aria-label="显示模式">
+          <div className="segmented" role="tablist" aria-label={t('Display mode')}>
             {modeMeta.map((item) => (
               <button
                 key={item.id}
@@ -231,41 +327,45 @@ export default function Dashboard() {
                 aria-selected={mode === item.id}
                 className={mode === item.id ? 'active' : ''}
                 onClick={() => setMode(item.id)}
-                title={item.id === 'hybrid' ? '3D 舞台 + 2D 网格并列' : undefined}
+                title={t(item.label)}
               >
                 <Icon name={item.icon} size={13} />
-                <span>{item.label}</span>
+                <span>{t(item.label)}</span>
               </button>
             ))}
           </div>
 
-          {(is3D || mode === 'hybrid') && (
+          {is3D && (
             <button
               className={`chip${autoRotate ? ' active' : ''}`}
               onClick={() => setAutoRotate((value) => !value)}
-              title="自动旋转 (R)"
+              title={t('Auto-rotate (R)')}
             >
-              <Icon name="refresh" size={13} /> 自动旋转
+              <Icon name="refresh" size={13} /> {t('Auto-rotate')}
             </button>
           )}
 
+          <button className="chip" onClick={cycleScenery} title={t('Change the 3D scenery')}>
+            <Icon name="orbit" size={13} /> {t('Scenery')}: {t(sceneryLabel[background?.style ?? 'grid'])}
+          </button>
+
           <div className="right flex">
             <button className="btn small ghost" onClick={() => setCreating(true)}>
-              <Icon name="plus" size={14} /> 新账号
+              <Icon name="plus" size={14} /> {t('New account')}
             </button>
             <button className="btn small ghost" onClick={() => setTransferOpen(true)}>
-              <Icon name="download" size={14} /> 导入/导出
+              <Icon name="download" size={14} /> {t('Import / export')}
             </button>
             <button className="btn small ghost" onClick={() => setGroupsOpen(true)}>
-              <Icon name="users" size={14} /> 分组
+              <Icon name="users" size={14} /> {t('Groups')}
             </button>
           </div>
         </div>
 
         {visible.length === 0 ? (
           <div className="empty">
-            <strong>没有匹配的账号</strong>
-            <span>换个分组或清空搜索，也可以新建账号或导入导出文件。</span>
+            <strong>{t('No matching accounts')}</strong>
+            <span>{t('Try another group or clear the search, or create and import accounts.')}</span>
           </div>
         ) : is3D ? (
           <Stage3D
@@ -274,29 +374,15 @@ export default function Dashboard() {
             autoRotate={autoRotate}
             items={visible.map((account) => cardFor(account))}
           />
-        ) : mode === 'hybrid' ? (
-          <div className="hybrid">
-            <div className="hybrid-stage">
-              <Stage3D
-                layout="wall"
-                count={visible.length}
-                autoRotate={autoRotate}
-                dim={0.25}
-                items={visible.map((account) => cardFor(account))}
-              />
-            </div>
-            <div className="hybrid-grid">
-              {visible.map((account) => (
-                <div className="grid2d-cell" key={account.id}>
-                  {cardFor(account)}
-                </div>
-              ))}
-            </div>
-          </div>
         ) : mode === 'grid' ? (
-          <div className="grid2d">
-            {visible.map((account) => (
-              <div className="grid2d-cell" key={account.id}>
+          <div className={`grid2d${canReorder ? ' reorderable' : ''}${dragging ? ' dragging' : ''}`}>
+            {ordered.map((account) => (
+              <div
+                className={`grid2d-cell${draft?.includes(account.id) ? ' draggable' : ''}`}
+                key={account.id}
+                data-account-id={account.id}
+                onPointerDown={(event) => beginDrag(event, account)}
+              >
                 {cardFor(account)}
               </div>
             ))}
@@ -325,6 +411,7 @@ export default function Dashboard() {
                       event.stopPropagation()
                       void toggleFavorite(account.id)
                     }}
+                    title={t('Pin')}
                   >
                     <Icon name={account.is_favorite ? 'star-filled' : 'star'} size={14} />
                   </button>
@@ -334,6 +421,7 @@ export default function Dashboard() {
                       event.stopPropagation()
                       setEditing(account)
                     }}
+                    title={t('Details')}
                   >
                     <Icon name="sliders" size={14} />
                   </button>
@@ -353,51 +441,52 @@ export default function Dashboard() {
                 <strong>{accountLabel(selected)}</strong>
                 <span>
                   {accountSubLabel(selected)} ·{' '}
-                  {selected.otp_type === 'hotp' ? 'counter' : `${remainingSeconds(selected, now)}s`}
+                  {selected.otp_type === 'hotp' ? t('counter') : `${remainingSeconds(selected, now)}s`}
                 </span>
               </div>
-              <button className={`focus-otp${dots ? ' dots' : ''}`} onClick={() => void copy(selected)} title="点击复制">
+              <button className={`focus-otp${dots ? ' dots' : ''}`} onClick={() => void copy(selected)} title={t('Click to copy')}>
                 {displayCode(selected, false, true)}
               </button>
               <div className="flex">
                 <button className="btn small primary" onClick={() => void copy(selected)}>
-                  <Icon name="copy" size={14} /> 复制
+                  <Icon name="copy" size={14} /> {t('Copy')}
                 </button>
                 {selected.otp_type === 'hotp' && (
                   <button className="btn small" onClick={() => void hotp(selected)}>
-                    <Icon name="refresh" size={14} /> 下一个
+                    <Icon name="refresh" size={14} /> {t('Next')}
                   </button>
                 )}
                 <button className="btn small ghost" onClick={() => setEditing(selected)}>
-                  <Icon name="sliders" size={14} /> 详情
+                  <Icon name="sliders" size={14} /> {t('Details')}
                 </button>
               </div>
             </>
           ) : (
-            <span className="hint">还没有账号。</span>
+            <span className="hint">{t('No accounts yet.')}</span>
           )}
         </div>
 
         <div className="chips-bar" style={{ paddingBottom: 10, paddingTop: 0 }}>
           <span className="kbd-hint">
             <span>
-              <kbd>←</kbd> <kbd>→</kbd> 切换账号
+              <kbd>←</kbd> <kbd>→</kbd> {t('Switch account')}
             </span>
             <span>
-              <kbd>C</kbd> 复制
+              <kbd>C</kbd> {t('Copy')}
             </span>
             <span>
-              <kbd>R</kbd> 自动旋转
+              <kbd>R</kbd> {t('Auto-rotate')}
             </span>
             <span>
-              <kbd>F</kbd> 置顶
+              <kbd>F</kbd> {t('Pin')}
             </span>
             <span>
-              <kbd>E</kbd> 详情
+              <kbd>E</kbd> {t('Details')}
             </span>
             <span>
-              <kbd>/</kbd> 搜索
+              <kbd>/</kbd> {t('Search')}
             </span>
+            {canReorder && <span>{t('Drag cards to reorder')}</span>}
           </span>
         </div>
       </div>

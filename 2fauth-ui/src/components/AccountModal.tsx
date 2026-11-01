@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import type { Account, ApiError, Group, ShareRecipient } from '../api/types'
+import { useT } from '../i18n'
 import { useStore } from '../store/useStore'
 import Icon from './Icon'
 
@@ -27,6 +28,7 @@ type Form = typeof emptyForm
 
 /** Create / edit an account, with URI import, QR preview, sharing and deletion. */
 export default function AccountModal({ account, groups, onClose, onSaved }: Props) {
+  const t = useT()
   const toast = useStore((state) => state.toast)
   const [form, setForm] = useState<Form>(emptyForm)
   const [uri, setUri] = useState('')
@@ -107,7 +109,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
         counter: Number(preview.counter ?? 0),
         otp_type: preview.otp_type,
       }))
-      toast('success', 'URI parsed')
+      toast('success', t('URI parsed'))
     } catch (caught) {
       setError((caught as ApiError).message)
     }
@@ -149,7 +151,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
     setBusy(true)
     try {
       const response = await api.uploadIcon(file)
-      toast('success', `Icon ${response.icon} uploaded`)
+      toast('success', t('Icon {name} uploaded', { name: response.icon }))
     } catch (caught) {
       setError((caught as ApiError).message)
     } finally {
@@ -178,7 +180,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
     try {
       if (account) await api.updateAccount(account.id, payload)
       else await api.createAccount(payload)
-      toast('success', account ? 'Account updated' : 'Account added')
+      toast('success', account ? t('Account updated') : t('Account added'))
       await onSaved()
       onClose()
     } catch (caught) {
@@ -202,7 +204,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
     try {
       if (selectedRecipients.length === 0) await api.unshare(account.id)
       else await api.share(account.id, selectedRecipients)
-      toast('success', 'Sharing updated')
+      toast('success', t('Sharing updated'))
       await loadExtras(account)
       setSelectedRecipients([])
     } catch (caught) {
@@ -217,7 +219,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
     setBusy(true)
     try {
       await api.shareWithAll(account.id)
-      toast('success', 'Shared with all users')
+      toast('success', t('Shared with all users'))
       await loadExtras(account)
     } catch (caught) {
       setError((caught as ApiError).message)
@@ -228,11 +230,11 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
 
   async function remove() {
     if (!account) return
-    if (!window.confirm(`Delete ${account.service || account.account}?`)) return
+    if (!window.confirm(t('Delete {name}?', { name: account.service || account.account || '' }))) return
     setBusy(true)
     try {
       await api.deleteAccount(account.id)
-      toast('success', 'Account deleted')
+      toast('success', t('Account deleted'))
       await onSaved()
       onClose()
     } catch (caught) {
@@ -251,8 +253,8 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
     <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="modal wide">
         <div className="modal-head">
-          <h3>{isEdit ? 'Account details' : 'New account'}</h3>
-          <button className="btn icon ghost close" onClick={onClose} aria-label="Close">
+          <h3>{isEdit ? t('Account details') : t('New account')}</h3>
+          <button className="btn icon ghost close" onClick={onClose} aria-label={t('Close')}>
             <Icon name="close" />
           </button>
         </div>
@@ -262,7 +264,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
             {!isEdit && (
               <div className="panel" style={{ padding: 16 }}>
                 <div className="field">
-                  <label>Paste an otpauth:// URI</label>
+                  <label>{t('Paste an otpauth:// URI')}</label>
                   <div className="flex">
                     <input
                       className="input grow mono"
@@ -271,13 +273,13 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
                       onChange={(event) => setUri(event.target.value)}
                     />
                     <button type="button" className="btn" onClick={applyUri}>
-                      Parse
+                      {t('Parse')}
                     </button>
                   </div>
                 </div>
                 <div className="flex wrap">
                   <label className="btn small ghost" style={{ cursor: 'pointer' }}>
-                    <Icon name="qr" size={14} /> Scan image
+                    <Icon name="qr" size={14} /> {t('Scan image')}
                     <input
                       type="file"
                       accept="image/*"
@@ -288,24 +290,24 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
                       }}
                     />
                   </label>
-                  <span className="hint">A screenshot of the QR code works too.</span>
+                  <span className="hint">{t('A screenshot of the QR code works too.')}</span>
                 </div>
               </div>
             )}
 
             <div className="row">
               <div className="field">
-                <label>Type</label>
+                <label>{t('Type')}</label>
                 <select className="select" value={form.otp_type} onChange={(event) => update('otp_type', event.target.value)}>
-                  <option value="totp">TOTP (time based)</option>
-                  <option value="hotp">HOTP (counter based)</option>
+                  <option value="totp">{t('TOTP (time based)')}</option>
+                  <option value="hotp">{t('HOTP (counter based)')}</option>
                   <option value="steamtotp">Steam</option>
                 </select>
               </div>
               <div className="field">
-                <label>Group</label>
+                <label>{t('Group')}</label>
                 <select className="select" value={form.group_id} onChange={(event) => update('group_id', event.target.value)}>
-                  <option value="">No group</option>
+                  <option value="">{t('No group')}</option>
                   {groups.map((group) => (
                     <option key={group.id} value={group.id}>
                       {group.name}
@@ -317,12 +319,12 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
 
             <div className="row">
               <div className="field">
-                <label>Service</label>
+                <label>{t('Service')}</label>
                 <input className="input" value={form.service} onChange={(event) => update('service', event.target.value)} />
                 {fields.service && <span className="error-text">{fields.service[0]}</span>}
               </div>
               <div className="field">
-                <label>Account</label>
+                <label>{t('Account')}</label>
                 <input
                   className="input"
                   value={form.account}
@@ -334,7 +336,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
             </div>
 
             <div className="field">
-              <label>Secret</label>
+              <label>{t('Secret')}</label>
               <input
                 className="input mono"
                 value={form.secret}
@@ -347,7 +349,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
 
             <div className="row">
               <div className="field">
-                <label>Algorithm</label>
+                <label>{t('Algorithm')}</label>
                 <select className="select" value={form.algorithm} onChange={(event) => update('algorithm', event.target.value)}>
                   <option value="sha1">SHA1</option>
                   <option value="sha256">SHA256</option>
@@ -356,7 +358,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
                 </select>
               </div>
               <div className="field">
-                <label>Digits</label>
+                <label>{t('Digits')}</label>
                 <input
                   className="input"
                   type="number"
@@ -368,7 +370,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
               </div>
               {form.otp_type === 'hotp' ? (
                 <div className="field">
-                  <label>Counter</label>
+                  <label>{t('Counter')}</label>
                   <input
                     className="input"
                     type="number"
@@ -379,7 +381,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
                 </div>
               ) : (
                 <div className="field">
-                  <label>Period</label>
+                  <label>{t('Period')}</label>
                   <input
                     className="input"
                     type="number"
@@ -393,7 +395,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
 
             <div className="flex wrap">
               <label className="btn small ghost" style={{ cursor: 'pointer' }}>
-                <Icon name="upload" size={14} /> Upload icon
+                <Icon name="upload" size={14} /> {t('Upload icon')}
                 <input
                   type="file"
                   accept="image/*"
@@ -406,7 +408,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
               </label>
               {isEdit && qr && (
                 <div className="qr-preview" style={{ padding: 10 }}>
-                  <img src={qr} alt="Account QR code" style={{ width: 130, height: 130 }} />
+                  <img src={qr} alt={t('Account QR code')} style={{ width: 130, height: 130 }} />
                 </div>
               )}
             </div>
@@ -414,13 +416,15 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
             {isEdit && account && (
               <div className="panel" style={{ padding: 16 }}>
                 <div className="flex" style={{ marginBottom: 10 }}>
-                  <strong>Sharing</strong>
+                  <strong>{t('Sharing')}</strong>
                   <span className="hint right">
-                    {account.is_borrowed ? `owned by ${account.borrowed_by}` : 'Share the OTP without the secret'}
+                    {account.is_borrowed
+                      ? t('Owned by {name}', { name: account.borrowed_by ?? '' })
+                      : t('Share the OTP without the secret')}
                   </span>
                 </div>
                 <div className="flex wrap" style={{ marginBottom: 10 }}>
-                  {shares.length === 0 && <span className="hint">Not shared yet.</span>}
+                  {shares.length === 0 && <span className="hint">{t('Not shared yet.')}</span>}
                   {shares.map((recipient) => (
                     <span className="chip active" key={recipient.id}>
                       {recipient.name}
@@ -430,12 +434,12 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
                 <div className="flex">
                   <input
                     className="input grow"
-                    placeholder="Filter users…"
+                    placeholder={t('Filter users…')}
                     value={recipientFilter}
                     onChange={(event) => setRecipientFilter(event.target.value)}
                   />
                   <button type="button" className="btn small" onClick={shareEveryone} disabled={busy}>
-                    Share with all
+                    {t('Share with all')}
                   </button>
                 </div>
                 <div className="flex wrap" style={{ marginTop: 10 }}>
@@ -451,7 +455,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
                   ))}
                 </div>
                 <button type="button" className="btn small" style={{ marginTop: 12 }} onClick={saveShares} disabled={busy}>
-                  Save sharing
+                  {t('Save sharing')}
                 </button>
               </div>
             )}
@@ -462,14 +466,14 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
           <div className="modal-foot">
             {isEdit && (
               <button type="button" className="btn danger" onClick={remove} disabled={busy}>
-                <Icon name="trash" size={14} /> Delete
+                <Icon name="trash" size={14} /> {t('Delete')}
               </button>
             )}
             <button type="button" className="btn ghost" onClick={onClose}>
-              Cancel
+              {t('Cancel')}
             </button>
             <button type="submit" className="btn primary" disabled={busy}>
-              {isEdit ? 'Save changes' : 'Add account'}
+              {isEdit ? t('Save changes') : t('Add account')}
             </button>
           </div>
         </form>

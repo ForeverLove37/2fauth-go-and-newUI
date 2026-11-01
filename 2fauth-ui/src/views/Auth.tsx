@@ -3,18 +3,38 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import Icon from '../components/Icon'
 import { useStore } from '../store/useStore'
 import { sso, type SsoConfig } from '../api/sso'
+import { locales, useI18nStore, useT } from '../i18n'
 import type { ApiError } from '../api/types'
 
 const ssoErrors: Record<string, string> = {
-  cancelled: '已取消 SSO 登录',
-  state: 'SSO 会话已失效，请重试',
-  provider: '无法连接身份提供方，请检查 Issuer 配置',
-  exchange: '无法用授权码换取令牌，请检查 client secret 与回调地址',
-  userinfo: '身份提供方未返回用户信息',
-  email: '身份提供方未返回邮箱地址',
-  register_disabled: '本实例已关闭注册，无法自动创建账号',
-  account: '无法匹配到账号，请联系管理员',
-  server: '服务器内部错误',
+  cancelled: 'SSO sign-in was cancelled',
+  state: 'The SSO session expired, please try again',
+  provider: 'Could not reach the identity provider — check the issuer',
+  exchange: 'Could not exchange the authorization code — check the client secret and redirect URI',
+  userinfo: 'The identity provider did not return user information',
+  email: 'The identity provider did not return an e-mail address',
+  register_disabled: 'This instance does not accept new accounts',
+  account: 'No account matches this identity, contact an administrator',
+  server: 'Internal server error',
+}
+
+/** Language switcher shown before signing in. */
+function LanguagePicker() {
+  const t = useT()
+  const locale = useI18nStore((state) => state.locale)
+  const setLocale = useI18nStore((state) => state.setLocale)
+  return (
+    <div className="auth-lang">
+      <Icon name="orbit" size={13} />
+      <select value={locale} onChange={(event) => setLocale(event.target.value)} aria-label={t('Language')}>
+        {locales.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
 }
 
 function useSubmit() {
@@ -49,6 +69,7 @@ export function Login() {
   const { busy, error, fields, run } = useSubmit()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const t = useT()
   const [params] = useSearchParams()
   const [ssoConfig, setSsoConfig] = useState<SsoConfig | null>(null)
   const [ssoError, setSsoError] = useState('')
@@ -62,7 +83,7 @@ export function Login() {
 
   useEffect(() => {
     const code = params.get('sso_error')
-    if (code) setSsoError(ssoErrors[code] ?? `SSO 登录失败（${code}）`)
+    if (code) setSsoError(t(ssoErrors[code] ?? 'SSO sign-in failed ({code})', { code }))
   }, [params])
 
   async function startSso() {
@@ -97,15 +118,16 @@ export function Login() {
 
   return (
     <div className="auth">
+      <LanguagePicker />
       <form className="auth-card" onSubmit={submit}>
         <div className="auth-hero">
           <div className="brand-mark">2F</div>
-          <h1>欢迎回来</h1>
-          <p className="sub">登录你的 {config?.appName ?? '2FAuth'} 保险库</p>
+          <h1>{t('Welcome back')}</h1>
+          <p className="sub">{t('Sign in to your {app} vault', { app: config?.appName ?? '2FAuth' })}</p>
         </div>
 
         <div className="field">
-          <label htmlFor="email">Email</label>
+          <label htmlFor="email">{t('Email')}</label>
           <input
             id="email"
             className="input"
@@ -120,7 +142,7 @@ export function Login() {
         </div>
 
         <div className="field">
-          <label htmlFor="password">Password</label>
+          <label htmlFor="password">{t('Password')}</label>
           <input
             id="password"
             className="input"
@@ -138,23 +160,23 @@ export function Login() {
 
         {!ssoOnly && (
           <button className="btn primary" type="submit" disabled={busy}>
-            {busy ? '正在登录…' : '登录'}
+            {busy ? t('Signing in…') : t('Sign in')}
           </button>
         )}
 
         {ssoConfig?.enabled && (
           <>
-            <div className="auth-divider">或</div>
+            <div className="auth-divider">{t('or')}</div>
             <button type="button" className="btn sso-btn" onClick={() => void startSso()}>
               <Icon name="shield" size={15} />
-              {ssoConfig.label || '使用 SSO 登录'}
+              {ssoConfig.label || t('Sign in with SSO')}
             </button>
           </>
         )}
 
         {registrationOpen && (
           <p className="auth-switch">
-            No account yet? <Link to="/register">Create one</Link>
+            {t('No account yet?')} <Link to="/register">{t('Create one')}</Link>
           </p>
         )}
       </form>
@@ -163,6 +185,7 @@ export function Login() {
 }
 
 export function Register() {
+  const t = useT()
   const { register, config } = useStore()
   const navigate = useNavigate()
   const { busy, error, fields, run } = useSubmit()
@@ -183,10 +206,10 @@ export function Register() {
     return (
       <div className="auth">
         <div className="auth-card">
-          <h1>Registration closed</h1>
-          <p className="sub">This instance does not accept new accounts.</p>
+          <h1>{t('Registration closed')}</h1>
+          <p className="sub">{t('This instance does not accept new accounts.')}</p>
           <Link className="btn primary" to="/login">
-            Back to sign in
+            {t('Back to sign in')}
           </Link>
         </div>
       </div>
@@ -195,21 +218,22 @@ export function Register() {
 
   return (
     <div className="auth">
+      <LanguagePicker />
       <form className="auth-card" onSubmit={submit}>
         <div className="auth-hero">
           <div className="brand-mark">2F</div>
-          <h1>创建账号</h1>
-          <p className="sub">第一个注册的账号将成为管理员</p>
+          <h1>{t('Create account')}</h1>
+          <p className="sub">{t('The first account becomes the administrator')}</p>
         </div>
 
         <div className="field">
-          <label htmlFor="name">Name</label>
+          <label htmlFor="name">{t('Name')}</label>
           <input id="name" className="input" value={name} onChange={(event) => setName(event.target.value)} required autoFocus />
           <FieldError messages={fields.name} />
         </div>
 
         <div className="field">
-          <label htmlFor="email">Email</label>
+          <label htmlFor="email">{t('Email')}</label>
           <input
             id="email"
             className="input"
@@ -223,7 +247,7 @@ export function Register() {
 
         <div className="row">
           <div className="field">
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password">{t('Password')}</label>
             <input
               id="password"
               className="input"
@@ -236,7 +260,7 @@ export function Register() {
             <FieldError messages={fields.password} />
           </div>
           <div className="field">
-            <label htmlFor="confirmation">Confirm</label>
+            <label htmlFor="confirmation">{t('Confirm')}</label>
             <input
               id="confirmation"
               className="input"
@@ -252,11 +276,11 @@ export function Register() {
         {error && <p className="error-text">{error}</p>}
 
         <button className="btn primary" type="submit" disabled={busy}>
-          {busy ? 'Creating…' : 'Create account'}
+          {busy ? t('Creating…') : t('Create account')}
         </button>
 
         <p className="auth-switch">
-          Already registered? <Link to="/login">Sign in</Link>
+          {t('Already registered?')} <Link to="/login">{t('Sign in')}</Link>
         </p>
       </form>
     </div>

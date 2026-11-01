@@ -56,6 +56,7 @@ interface ThemeState {
   patchSurface: (patch: Partial<ThemeConfig['surface']>) => void
   patchTypography: (patch: Partial<ThemeConfig['typography']>) => void
   patchMotion: (patch: Partial<ThemeConfig['motion']>) => void
+  patchBackground: (patch: Partial<ThemeConfig['background']>) => void
   saveProfile: (name: string) => ThemeProfile
   applyProfile: (id: string) => void
   renameProfile: (id: string, name: string) => void
@@ -118,6 +119,10 @@ export const useThemeStore = create<ThemeState>((set, get) => {
 
     patchTypography(patch) {
       commit({ ...get().theme, typography: { ...get().theme.typography, ...patch } })
+    },
+
+    patchBackground(patch) {
+      commit({ ...get().theme, background: { ...get().theme.background, ...patch } })
     },
 
     patchMotion(patch) {

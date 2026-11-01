@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useT } from '../i18n'
 import { useStore } from '../store/useStore'
 import { presets } from '../theme/presets'
 import { useThemeStore } from '../theme/store'
@@ -15,6 +16,7 @@ function initials(name: string): string {
 
 /** Application frame: top bar, routed content and toasts. */
 export default function Shell() {
+  const t = useT()
   const user = useStore((state) => state.user)
   const config = useStore((state) => state.config)
   const logout = useStore((state) => state.logout)
@@ -44,20 +46,20 @@ export default function Shell() {
             <div className="brand-mark">2F</div>
             <div>
               {config?.appName ?? '2FAuth'}
-              <small>3D control panel</small>
+              <small>{t('3D control panel')}</small>
             </div>
           </div>
 
           <nav className="nav">
             <NavLink to="/" end>
-              <Icon name="orbit" size={15} /> <span>Panel</span>
+              <Icon name="orbit" size={15} /> <span>{t('Panel')}</span>
             </NavLink>
             <NavLink to="/settings">
-              <Icon name="sliders" size={15} /> <span>Settings</span>
+              <Icon name="sliders" size={15} /> <span>{t('Settings')}</span>
             </NavLink>
             {user?.is_admin && (
               <NavLink to="/settings?tab=admin">
-                <Icon name="shield" size={15} /> <span>Admin</span>
+                <Icon name="shield" size={15} /> <span>{t('Admin')}</span>
               </NavLink>
             )}
           </nav>
@@ -65,13 +67,17 @@ export default function Shell() {
           <div className="spacer" />
 
           <div className="flex">
-            <button className="btn icon ghost" onClick={cycleTheme} title={`主题：${theme.name}（点击切换下一套）`}>
+            <button
+              className="btn icon ghost"
+              onClick={cycleTheme}
+              title={t('Theme: {name} — click for the next one', { name: theme.name })}
+            >
               <Icon name="eye" size={15} />
             </button>
             <button className="avatar" title={user ? `${user.name} · ${user.email}` : ''} onClick={() => navigate('/settings')}>
               {initials(user?.name ?? '?')}
             </button>
-            <button className="btn icon ghost" onClick={signOut} title="Sign out">
+            <button className="btn icon ghost" onClick={signOut} title={t('Sign out')}>
               <Icon name="logout" size={15} />
             </button>
           </div>

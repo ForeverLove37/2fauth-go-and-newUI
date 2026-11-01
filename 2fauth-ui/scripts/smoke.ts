@@ -61,6 +61,9 @@ const accounts = [
 async function main() {
   const { useStore } = await import('../src/store/useStore')
   const { useThemeStore } = await import('../src/theme/store')
+  const { useI18nStore } = await import('../src/i18n')
+  useI18nStore.getState().setLocale('zh-CN')
+  await tick(60)
   const Dashboard = (await import('../src/views/Dashboard')).default
   const Settings = (await import('../src/views/Settings')).default
   const ThemeEditor = (await import('../src/views/ThemeEditor')).default
@@ -145,7 +148,7 @@ async function main() {
   assert('stage present', container.querySelector('.stage3d') !== null)
 
   // every display mode must keep all codes on screen
-  const modes = ['环绕', '螺旋', '卡墙', '球面', '混合', '网格', '列表']
+  const modes = ['环绕', '螺旋', '卡墙', '球面', '网格', '列表']
   for (const label of modes) {
     const button = [...container.querySelectorAll('.segmented button')].find((element) =>
       element.textContent?.includes(label),
@@ -153,7 +156,7 @@ async function main() {
     assert(`mode button "${label}" exists`, Boolean(button))
     button?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
     await tick(120)
-    if (label === '网格' || label === '混合') {
+    if (label === '网格') {
       assert(`${label}: grid shows all codes`, container.querySelectorAll('.grid2d-cell .orbit-card').length === 3)
     } else if (label === '列表') {
       assert('列表: rows rendered', container.querySelectorAll('.account-row').length === 3)
@@ -231,7 +234,10 @@ async function main() {
   assert('SSO panel shows the issuer field', Boolean(issuerInput))
   assert('SSO panel preloads the stored issuer', issuerInput?.value === 'https://keycloak.example.com/realms/main')
   assert('SSO panel lists provider presets', settingsHost.textContent?.includes('Keycloak') === true)
-  assert('SSO panel has the Keycloak export buttons', settingsHost.textContent?.includes('Client JSON') === true)
+  assert(
+    'SSO panel has the three Keycloak export buttons',
+    [...settingsHost.querySelectorAll('button')].filter((element) => /JSON|导入|kcadm|脚本/.test(element.textContent ?? '')).length >= 3,
+  )
 
   // a light preset must switch the document theme
   const paperSwatch = [...editorHost.querySelectorAll('.theme-swatch')].find((element) =>
@@ -240,6 +246,41 @@ async function main() {
   paperSwatch?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
   await tick(120)
   assert('light preset sets data-theme="light"', window.document.documentElement.dataset.theme === 'light')
+
+  // background scenery: every style is selectable and applies immediately
+  const sceneryTiles = [...editorHost.querySelectorAll('.scenery-tile')]
+  assert('theme editor offers 7 background styles', sceneryTiles.length >= 7)
+  const nebulaTile = sceneryTiles.find((element) => element.textContent?.includes('星云')) as HTMLButtonElement | undefined
+  nebulaTile?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(120)
+  assert('choosing a scenery updates <html data-bg>', window.document.documentElement.dataset.bg === 'nebula')
+
+  // grid: cards expose a reorder handle and drag order draft
+  container.querySelector('[role="tab"][aria-selected="false"]')
+  const gridButton = [...container.querySelectorAll('.segmented button')].find((element) =>
+    element.textContent?.includes('网格'),
+  ) as HTMLButtonElement | undefined
+  gridButton?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(160)
+  const cells = [...container.querySelectorAll('.grid2d-cell')]
+  assert('grid mode renders reorderable cells', cells.length === 3 && container.querySelector('.grid2d.reorderable') !== null)
+  assert('grid cells carry account ids', cells.every((cell) => (cell as HTMLElement).dataset.accountId !== undefined))
+
+  // horizontal resolution: 3D cards get an LOD bucket instead of being stretched
+  const orbitButton = [...container.querySelectorAll('.segmented button')].find((element) =>
+    element.textContent?.includes('环绕'),
+  ) as HTMLButtonElement | undefined
+  orbitButton?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(200)
+  const lodItems = [...container.querySelectorAll('.stage3d-item')]
+  assert('3D cards declare a LOD bucket', lodItems.length === 3 && lodItems.every((item) => (item as HTMLElement).dataset.lod !== undefined))
+
+  // i18n: switching to English relabels the interface
+  useI18nStore.getState().setLocale('en')
+  await tick(150)
+  assert('English locale relabels the dashboard', container.textContent?.includes('Pinned') === true)
+  useI18nStore.getState().setLocale('zh-CN')
+  await tick(100)
 
   assert('no runtime errors', errors.length === 0)
   if (errors.length) console.error(errors.slice(0, 5))

@@ -4,7 +4,8 @@ import { download, stamp } from '../lib/format'
 import { fontChoices, monoChoices, previewStyle } from '../theme/apply'
 import { presets } from '../theme/presets'
 import { useThemeStore } from '../theme/store'
-import type { ThemeConfig } from '../theme/types'
+import type { BackgroundStyle, ThemeConfig } from '../theme/types'
+import { useT } from '../i18n'
 import { useStore } from '../store/useStore'
 
 function ColorField({
@@ -83,8 +84,19 @@ function Swatch({ theme, active, onClick }: { theme: ThemeConfig; active: boolea
   )
 }
 
+const sceneryChoices: { id: BackgroundStyle; label: string }[] = [
+  { id: 'grid', label: 'Grid' },
+  { id: 'stars', label: 'Starfield' },
+  { id: 'nebula', label: 'Nebula' },
+  { id: 'waves', label: 'Waves' },
+  { id: 'aurora', label: 'Aurora' },
+  { id: 'bokeh', label: 'Bokeh' },
+  { id: 'minimal', label: 'Minimal' },
+]
+
 /** Appearance centre: presets, per-token editing, live preview and named profiles. */
 export default function ThemeEditor() {
+  const t = useT()
   const theme = useThemeStore((state) => state.theme)
   const profiles = useThemeStore((state) => state.profiles)
   const usePreset = useThemeStore((state) => state.usePreset)
@@ -92,6 +104,7 @@ export default function ThemeEditor() {
   const patchSurface = useThemeStore((state) => state.patchSurface)
   const patchTypography = useThemeStore((state) => state.patchTypography)
   const patchMotion = useThemeStore((state) => state.patchMotion)
+  const patchBackground = useThemeStore((state) => state.patchBackground)
   const saveProfile = useThemeStore((state) => state.saveProfile)
   const applyProfile = useThemeStore((state) => state.applyProfile)
   const renameProfile = useThemeStore((state) => state.renameProfile)
@@ -109,12 +122,12 @@ export default function ThemeEditor() {
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h2>预设主题</h2>
-            <p>{presets.length} 套内置配色，点击立即生效；改完可另存为自己的配置档案。</p>
+            <h2>{t('Preset themes')}</h2>
+            <p>{t('{count} built-in palettes, applied instantly; save your own edits as a profile.', { count: presets.length })}</p>
           </div>
           <div className="right flex">
-            <button className="btn small ghost" onClick={reset} title="恢复默认">
-              <Icon name="refresh" size={14} /> 默认
+            <button className="btn small ghost" onClick={reset} title={t('Reset to defaults')}>
+              <Icon name="refresh" size={14} /> {t('Defaults')}
             </button>
           </div>
         </div>
@@ -127,47 +140,88 @@ export default function ThemeEditor() {
         </div>
       </div>
 
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>{t('Background scenery')}</h2>
+            <p>{t('The animated scene behind your codes. Every preset ships its own; pick any style here.')}</p>
+          </div>
+        </div>
+        <div className="panel-body">
+          <div className="scenery-grid">
+            {sceneryChoices.map((item) => (
+              <button
+                key={item.id}
+                className={`scenery-tile${(theme.background?.style ?? 'grid') === item.id ? ' active' : ''}`}
+                onClick={() => patchBackground({ style: item.id })}
+                aria-pressed={(theme.background?.style ?? 'grid') === item.id}
+              >
+                <span className="scenery-thumb" data-style={item.id} />
+                <span>{t(item.label)}</span>
+              </button>
+            ))}
+          </div>
+          <Slider
+            label={t('Scenery brightness')}
+            value={theme.background?.intensity ?? 1}
+            min={0.2}
+            max={1.6}
+            step={0.05}
+            onChange={(value) => patchBackground({ intensity: value })}
+          />
+          <Slider
+            label={t('Scenery speed')}
+            value={theme.background?.speed ?? 1}
+            min={0}
+            max={3}
+            step={0.05}
+            suffix="×"
+            onChange={(value) => patchBackground({ speed: value })}
+          />
+        </div>
+      </div>
+
       <div className="row" style={{ alignItems: 'flex-start' }}>
         <div className="panel grow" style={{ flex: '2 1 420px' }}>
           <div className="panel-head">
             <div>
-              <h2>背景与表面</h2>
-              <p>页面底色、三处光晕、玻璃面板与圆角模糊。</p>
+              <h2>{t('Background & surfaces')}</h2>
+              <p>{t('Page colours, the three glows, glass panels, radius and blur.')}</p>
             </div>
           </div>
           <div className="panel-body">
-            <ColorField label="底色" value={theme.palette.bg} onChange={(value) => patchPalette({ bg: value })} />
-            <ColorField label="底色（渐变末端）" value={theme.palette.bg2} onChange={(value) => patchPalette({ bg2: value })} />
-            <ColorField label="光晕 A" value={theme.palette.glowA} onChange={(value) => patchPalette({ glowA: value })} />
-            <ColorField label="光晕 B" value={theme.palette.glowB} onChange={(value) => patchPalette({ glowB: value })} />
-            <ColorField label="光晕 C" value={theme.palette.glowC} onChange={(value) => patchPalette({ glowC: value })} />
-            <ColorField label="面板底色" value={theme.palette.panel} onChange={(value) => patchPalette({ panel: value })} />
-            <ColorField label="面板描边" value={theme.palette.border} onChange={(value) => patchPalette({ border: value })} />
-            <ColorField label="强调描边" value={theme.palette.borderStrong} onChange={(value) => patchPalette({ borderStrong: value })} />
-            <Slider label="面板不透明度" value={theme.palette.panelAlpha} min={0.35} max={1} step={0.01} onChange={(value) => patchPalette({ panelAlpha: value })} />
-            <Slider label="圆角" value={theme.surface.radius} min={4} max={30} suffix="px" onChange={(value) => patchSurface({ radius: value })} />
-            <Slider label="毛玻璃模糊" value={theme.surface.blur} min={0} max={40} suffix="px" onChange={(value) => patchSurface({ blur: value })} />
-            <Toggle label="卡片使用渐变表面" value={theme.surface.cardGradient} onChange={(value) => patchSurface({ cardGradient: value })} />
+            <ColorField label={t("Page background")} value={theme.palette.bg} onChange={(value) => patchPalette({ bg: value })} />
+            <ColorField label={t("Page background (gradient end)")} value={theme.palette.bg2} onChange={(value) => patchPalette({ bg2: value })} />
+            <ColorField label={t("Glow A")} value={theme.palette.glowA} onChange={(value) => patchPalette({ glowA: value })} />
+            <ColorField label={t("Glow B")} value={theme.palette.glowB} onChange={(value) => patchPalette({ glowB: value })} />
+            <ColorField label={t("Glow C")} value={theme.palette.glowC} onChange={(value) => patchPalette({ glowC: value })} />
+            <ColorField label={t("Panel colour")} value={theme.palette.panel} onChange={(value) => patchPalette({ panel: value })} />
+            <ColorField label={t("Panel border")} value={theme.palette.border} onChange={(value) => patchPalette({ border: value })} />
+            <ColorField label={t("Accent border")} value={theme.palette.borderStrong} onChange={(value) => patchPalette({ borderStrong: value })} />
+            <Slider label={t("Panel opacity")} value={theme.palette.panelAlpha} min={0.35} max={1} step={0.01} onChange={(value) => patchPalette({ panelAlpha: value })} />
+            <Slider label={t("Corner radius")} value={theme.surface.radius} min={4} max={30} suffix="px" onChange={(value) => patchSurface({ radius: value })} />
+            <Slider label={t("Backdrop blur")} value={theme.surface.blur} min={0} max={40} suffix="px" onChange={(value) => patchSurface({ blur: value })} />
+            <Toggle label={t("Gradient card surface")} value={theme.surface.cardGradient} onChange={(value) => patchSurface({ cardGradient: value })} />
           </div>
         </div>
 
         <div className="panel grow" style={{ flex: '2 1 420px' }}>
           <div className="panel-head">
             <div>
-              <h2>文字与强调色</h2>
-              <p>正文、次要文字、品牌三色与状态色。</p>
+              <h2>{t('Text & accents')}</h2>
+              <p>{t('Body text, secondary text, the three brand colours and the status colours.')}</p>
             </div>
           </div>
           <div className="panel-body">
-            <ColorField label="正文" value={theme.palette.text} onChange={(value) => patchPalette({ text: value })} />
-            <ColorField label="次要文字" value={theme.palette.muted} onChange={(value) => patchPalette({ muted: value })} />
-            <ColorField label="强调色" value={theme.palette.accent} onChange={(value) => patchPalette({ accent: value })} />
-            <ColorField label="强调色 2" value={theme.palette.accent2} onChange={(value) => patchPalette({ accent2: value })} />
-            <ColorField label="强调色 3" value={theme.palette.accent3} onChange={(value) => patchPalette({ accent3: value })} />
-            <ColorField label="危险" value={theme.palette.danger} onChange={(value) => patchPalette({ danger: value })} />
-            <ColorField label="警告" value={theme.palette.warn} onChange={(value) => patchPalette({ warn: value })} />
+            <ColorField label={t("Body text")} value={theme.palette.text} onChange={(value) => patchPalette({ text: value })} />
+            <ColorField label={t("Secondary text")} value={theme.palette.muted} onChange={(value) => patchPalette({ muted: value })} />
+            <ColorField label={t("Accent")} value={theme.palette.accent} onChange={(value) => patchPalette({ accent: value })} />
+            <ColorField label={t("Accent 2")} value={theme.palette.accent2} onChange={(value) => patchPalette({ accent2: value })} />
+            <ColorField label={t("Accent 3")} value={theme.palette.accent3} onChange={(value) => patchPalette({ accent3: value })} />
+            <ColorField label={t("Danger")} value={theme.palette.danger} onChange={(value) => patchPalette({ danger: value })} />
+            <ColorField label={t("Warning")} value={theme.palette.warn} onChange={(value) => patchPalette({ warn: value })} />
             <div className="field" style={{ marginTop: 10 }}>
-              <label>正文字体</label>
+              <label>{t('Body font')}</label>
               <select className="select" value={theme.typography.sans} onChange={(event) => patchTypography({ sans: event.target.value })}>
                 {fontChoices.map((font) => (
                   <option key={font.id} value={font.value}>
@@ -177,7 +231,7 @@ export default function ThemeEditor() {
               </select>
             </div>
             <div className="field">
-              <label>验证码字体</label>
+              <label>{t('Code font')}</label>
               <select className="select" value={theme.typography.mono} onChange={(event) => patchTypography({ mono: event.target.value })}>
                 {monoChoices.map((font) => (
                   <option key={font.id} value={font.value}>
@@ -186,7 +240,7 @@ export default function ThemeEditor() {
                 ))}
               </select>
             </div>
-            <Slider label="验证码字号" value={theme.typography.scale} min={0.8} max={1.35} step={0.01} suffix="×" onChange={(value) => patchTypography({ scale: value })} />
+            <Slider label={t("Code size")} value={theme.typography.scale} min={0.8} max={1.35} step={0.01} suffix="×" onChange={(value) => patchTypography({ scale: value })} />
           </div>
         </div>
       </div>
@@ -195,31 +249,31 @@ export default function ThemeEditor() {
         <div className="panel grow">
           <div className="panel-head">
             <div>
-              <h2>动效</h2>
-              <p>过渡时长与 3D 舞台的自动旋转。</p>
+              <h2>{t('Motion')}</h2>
+              <p>{t('Transition duration and automatic rotation of the 3D stage.')}</p>
             </div>
           </div>
           <div className="panel-body">
-            <Toggle label="启用过渡动效" value={theme.motion.enabled} onChange={(value) => patchMotion({ enabled: value })} />
-            <Slider label="过渡时长" value={theme.motion.duration} min={0} max={600} step={10} suffix="ms" onChange={(value) => patchMotion({ duration: value })} />
-            <Toggle label="3D 舞台默认自动旋转" value={theme.motion.autoRotate} onChange={(value) => patchMotion({ autoRotate: value })} />
+            <Toggle label={t("Enable transitions")} value={theme.motion.enabled} onChange={(value) => patchMotion({ enabled: value })} />
+            <Slider label={t("Transition duration")} value={theme.motion.duration} min={0} max={600} step={10} suffix="ms" onChange={(value) => patchMotion({ duration: value })} />
+            <Toggle label={t("Auto-rotate the 3D stage")} value={theme.motion.autoRotate} onChange={(value) => patchMotion({ autoRotate: value })} />
           </div>
         </div>
 
         <div className="panel grow">
           <div className="panel-head">
             <div>
-              <h2>实时预览</h2>
-              <p>预览使用当前编辑中的值，和真实界面一致。</p>
+              <h2>{t('Live preview')}</h2>
+              <p>{t('The preview uses the values being edited, exactly like the real interface.')}</p>
             </div>
           </div>
           <div className="panel-body">
             <div className="preview-tile" style={{ background: 'var(--app-bg)' }}>
               <div className="flex">
-                <span className="chip active">置顶</span>
-                <span className="chip">工作</span>
-                <span className="btn small primary">主要按钮</span>
-                <span className="btn small">次要</span>
+                <span className="chip active">{t('Pinned')}</span>
+                <span className="chip">{t('Work')}</span>
+                <span className="btn small primary">{t('Primary button')}</span>
+                <span className="btn small">{t('Secondary')}</span>
               </div>
               <div className="preview-card">
                 <div className="flex">
@@ -241,8 +295,8 @@ export default function ThemeEditor() {
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h2>配置档案</h2>
-            <p>保存当前外观为命名档案，随时切回；也可导出 JSON 分享或备份。</p>
+            <h2>{t('Profiles')}</h2>
+            <p>{t('Save the current look as a named profile, switch back any time, or export it as JSON.')}</p>
           </div>
         </div>
         <div className="panel-body">
@@ -250,28 +304,28 @@ export default function ThemeEditor() {
             <input
               className="input"
               style={{ maxWidth: 240 }}
-              placeholder="档案名称"
+              placeholder={t('Profile name')}
               value={profileName}
               onChange={(event) => setProfileName(event.target.value)}
             />
             <button
               className="btn primary small"
               onClick={() => {
-                const profile = saveProfile(profileName || `档案 ${profiles.length + 1}`)
+                const profile = saveProfile(profileName || t('Profile {n}', { n: profiles.length + 1 }))
                 setProfileName('')
-                toast('success', `已保存「${profile.name}」`)
+                toast('success', t('Profile "{name}" saved', { name: profile.name }))
               }}
             >
-              <Icon name="check" size={14} /> 保存当前外观
+              <Icon name="check" size={14} /> {t('Save current look')}
             </button>
             <button
               className="btn small"
               onClick={() => download(`2fauth-theme-${stamp()}.json`, exportTheme())}
             >
-              <Icon name="download" size={14} /> 导出 JSON
+              <Icon name="download" size={14} /> {t('Export JSON')}
             </button>
             <button className="btn small" onClick={() => fileRef.current?.click()}>
-              <Icon name="upload" size={14} /> 导入 JSON
+              <Icon name="upload" size={14} /> {t('Import JSON')}
             </button>
             <input
               ref={fileRef}
@@ -282,19 +336,22 @@ export default function ThemeEditor() {
                 const file = event.target.files?.[0]
                 if (!file) return
                 const imported = importTheme(await file.text())
-                toast(imported ? 'success' : 'error', imported ? `已导入「${imported.name}」` : '文件不是有效的主题配置')
+                toast(
+                  imported ? 'success' : 'error',
+                  imported ? t('Profile "{name}" imported', { name: imported.name }) : t('That file is not a valid theme'),
+                )
               }}
             />
           </div>
 
           {profiles.length === 0 ? (
-            <p className="hint">还没有保存的档案。</p>
+            <p className="hint">{t('No saved profiles yet.')}</p>
           ) : (
             <table className="table">
               <thead>
                 <tr>
-                  <th>名称</th>
-                  <th>基础</th>
+                  <th>{t('Name')}</th>
+                  <th>{t('Base')}</th>
                   <th />
                 </tr>
               </thead>
@@ -302,20 +359,22 @@ export default function ThemeEditor() {
                 {profiles.map((profile) => (
                   <tr key={profile.id}>
                     <td>{profile.name}</td>
-                    <td className="small muted">{profile.theme.base === 'dark' ? '深色' : '浅色'} · {profile.theme.surface.radius}px</td>
+                    <td className="small muted">
+                      {profile.theme.base === 'dark' ? t('Dark') : t('Light')} · {profile.theme.surface.radius}px
+                    </td>
                     <td>
                       <div className="flex" style={{ justifyContent: 'flex-end' }}>
                         <button className="btn small ghost" onClick={() => applyProfile(profile.id)}>
-                          应用
+                          {t('Apply')}
                         </button>
                         <button
                           className="btn small ghost"
                           onClick={() => {
-                            const next = window.prompt('重命名档案', profile.name)
+                            const next = window.prompt(t('Rename profile'), profile.name)
                             if (next) renameProfile(profile.id, next)
                           }}
                         >
-                          重命名
+                          {t('Rename')}
                         </button>
                         <button className="btn small danger" onClick={() => deleteProfile(profile.id)}>
                           <Icon name="trash" size={13} />
@@ -329,7 +388,7 @@ export default function ThemeEditor() {
           )}
 
           <p className="hint" style={{ marginTop: 14 }}>
-            配置保存在本机浏览器（localStorage）。换设备时可用「导出 JSON」带走，或在设置中重新选配色。
+            {t('Profiles live in this browser (localStorage). Use "Export JSON" to move them to another device.')}
           </p>
         </div>
       </div>

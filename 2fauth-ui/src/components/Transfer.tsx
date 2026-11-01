@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api/client'
 import type { Account, ApiError, Group } from '../api/types'
+import { useT } from '../i18n'
 import { download, stamp } from '../lib/format'
 import { useStore } from '../store/useStore'
 import Icon from './Icon'
@@ -13,6 +14,7 @@ interface TransferProps {
 
 /** Import accounts from any supported export, or download a new export. */
 export function ImportExportModal({ accounts, onClose, onImported }: TransferProps) {
+  const t = useT()
   const toast = useStore((state) => state.toast)
   const [payload, setPayload] = useState('')
   const [busy, setBusy] = useState(false)
@@ -26,7 +28,7 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
       try {
         const decoded = await api.decodeQrCode(file)
         setPayload(decoded.data)
-        toast('success', 'QR code decoded')
+        toast('success', t('QR code decoded'))
       } catch (caught) {
         setError((caught as ApiError).message)
       } finally {
@@ -39,7 +41,7 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
 
   async function runImport() {
     if (!payload.trim()) {
-      setError('Paste an export or pick a file first')
+      setError(t('Paste an export or pick a file first'))
       return
     }
     setBusy(true)
@@ -48,7 +50,12 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
       const migrated = await api.importAccounts(payload.trim())
       const fresh = migrated.filter((account) => account.id < 0 && account.id !== -1)
       const duplicates = migrated.filter((account) => account.id === -1)
-      setProgress(`Found ${migrated.length} accounts (${duplicates.length} already known) — saving…`)
+      setProgress(
+        t('Found {total} accounts ({duplicates} already known) — saving…', {
+          total: migrated.length,
+          duplicates: duplicates.length,
+        }),
+      )
 
       let saved = 0
       for (const account of fresh) {
@@ -63,9 +70,9 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
           counter: account.counter ?? undefined,
         })
         saved += 1
-        setProgress(`Saved ${saved}/${fresh.length}…`)
+        setProgress(t('Saved {saved}/{total}…', { saved, total: fresh.length }))
       }
-      toast('success', `${saved} accounts imported`)
+      toast('success', t('{count} accounts imported', { count: saved }))
       await onImported()
       onClose()
     } catch (caught) {
@@ -80,38 +87,40 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
     if (selected.length === 0) return
     const blob = await api.exportBlob(selected)
     download(`2fauth_export_${stamp()}.json`, blob as unknown as string, 'application/json')
-    toast('success', 'Export downloaded')
+    toast('success', t('Export downloaded'))
   }
 
   async function exportOtpauth() {
     if (selected.length === 0) return
     const items = (await api.exportAccounts(selected, true)) as { uri: string }[]
     download(`2fauth_export_${stamp()}.txt`, items.map((item) => item.uri).join('\n'), 'text/plain')
-    toast('success', 'otpauth export downloaded')
+    toast('success', t('otpauth export downloaded'))
   }
 
   return (
     <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-head">
-          <h3>Import / export</h3>
-          <button className="btn icon ghost close" onClick={onClose} aria-label="Close">
+          <h3>{t('Import / export')}</h3>
+          <button className="btn icon ghost close" onClick={onClose} aria-label={t('Close')}>
             <Icon name="close" />
           </button>
         </div>
         <div className="modal-body stack">
           <div>
             <div className="field">
-              <label>Import</label>
+              <label>{t('Import')}</label>
               <textarea
                 value={payload}
                 onChange={(event) => setPayload(event.target.value)}
-                placeholder="Paste a 2FAuth JSON export, an Aegis/2FAS JSON, a list of otpauth:// URIs or an otpauth-migration URI"
+                placeholder={t(
+                  'Paste a 2FAuth JSON export, an Aegis/2FAS JSON, a list of otpauth:// URIs or an otpauth-migration URI',
+                )}
               />
             </div>
             <div className="flex wrap">
               <label className="btn small" style={{ cursor: 'pointer' }}>
-                <Icon name="upload" size={14} /> Load file
+                <Icon name="upload" size={14} /> {t('Load file')}
                 <input
                   type="file"
                   accept=".json,.txt,.csv,image/*"
@@ -123,7 +132,7 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
                 />
               </label>
               <button className="btn small primary" onClick={runImport} disabled={busy}>
-                Import now
+                {t('Import now')}
               </button>
               {progress && <span className="hint">{progress}</span>}
             </div>
@@ -131,7 +140,9 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
 
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
             <div className="field">
-              <label>Export {selected.length} of {accounts.length} accounts</label>
+              <label>
+                {t('Export {selected} of {total} accounts', { selected: selected.length, total: accounts.length })}
+              </label>
               <div className="flex wrap">
                 {accounts.map((account) => (
                   <button
@@ -155,7 +166,7 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
                 <Icon name="download" size={14} /> 2FAuth JSON
               </button>
               <button className="btn small" onClick={exportOtpauth} disabled={selected.length === 0}>
-                <Icon name="download" size={14} /> otpauth list
+                <Icon name="download" size={14} /> {t('otpauth list')}
               </button>
             </div>
           </div>
@@ -175,6 +186,7 @@ interface GroupsProps {
 
 /** Manage groups and their visibility in the chip bar. */
 export function GroupsModal({ groups, onClose, onChanged }: GroupsProps) {
+  const t = useT()
   const toast = useStore((state) => state.toast)
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -186,7 +198,7 @@ export function GroupsModal({ groups, onClose, onChanged }: GroupsProps) {
       await api.createGroup(name.trim())
       setName('')
       await onChanged()
-      toast('success', 'Group created')
+      toast('success', t('Group created'))
     } catch (caught) {
       toast('error', (caught as ApiError).message)
     } finally {
@@ -195,7 +207,7 @@ export function GroupsModal({ groups, onClose, onChanged }: GroupsProps) {
   }
 
   async function rename(group: Group) {
-    const next = window.prompt('Group name', group.name)
+    const next = window.prompt(t('Group name'), group.name)
     if (!next || next === group.name) return
     await api.updateGroup(group.id, next, group.show_in_chips)
     await onChanged()
@@ -207,18 +219,18 @@ export function GroupsModal({ groups, onClose, onChanged }: GroupsProps) {
   }
 
   async function remove(group: Group) {
-    if (!window.confirm(`Delete the group "${group.name}"? Accounts are kept.`)) return
+    if (!window.confirm(t('Delete the group "{name}"? Accounts are kept.', { name: group.name }))) return
     await api.deleteGroup(group.id)
     await onChanged()
-    toast('success', 'Group deleted')
+    toast('success', t('Group deleted'))
   }
 
   return (
     <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-head">
-          <h3>Groups</h3>
-          <button className="btn icon ghost close" onClick={onClose} aria-label="Close">
+          <h3>{t('Groups')}</h3>
+          <button className="btn icon ghost close" onClick={onClose} aria-label={t('Close')}>
             <Icon name="close" />
           </button>
         </div>
@@ -226,25 +238,25 @@ export function GroupsModal({ groups, onClose, onChanged }: GroupsProps) {
           <div className="flex">
             <input
               className="input grow"
-              placeholder="New group name"
+              placeholder={t('New group name')}
               value={name}
               onChange={(event) => setName(event.target.value)}
               onKeyDown={(event) => event.key === 'Enter' && void create()}
             />
             <button className="btn primary" onClick={create} disabled={busy || !name.trim()}>
-              <Icon name="plus" size={14} /> Add
+              <Icon name="plus" size={14} /> {t('Add')}
             </button>
           </div>
 
           {groups.length === 0 ? (
-            <p className="hint">No groups yet.</p>
+            <p className="hint">{t('No groups yet.')}</p>
           ) : (
             <table className="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Accounts</th>
-                  <th>Chip</th>
+                  <th>{t('Name')}</th>
+                  <th>{t('Accounts')}</th>
+                  <th>{t('Chip')}</th>
                   <th />
                 </tr>
               </thead>
@@ -259,7 +271,7 @@ export function GroupsModal({ groups, onClose, onChanged }: GroupsProps) {
                     <td>
                       <div className="flex" style={{ justifyContent: 'flex-end' }}>
                         <button className="btn small ghost" onClick={() => void rename(group)}>
-                          Rename
+                          {t('Rename')}
                         </button>
                         <button className="btn small danger" onClick={() => void remove(group)}>
                           <Icon name="trash" size={13} />

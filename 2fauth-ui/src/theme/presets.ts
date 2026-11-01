@@ -37,6 +37,7 @@ function preset(
     surface: { radius: 18, blur: 22, cardGradient: true, ...(rest.surface ?? {}) },
     typography: { sans, mono, scale: 1, ...(rest.typography ?? {}) },
     motion: { enabled: true, duration: 180, autoRotate: false, ...(rest.motion ?? {}) },
+    background: { style: 'grid', intensity: 1, speed: 1, ...(rest.background ?? {}) },
   }
 }
 
@@ -305,4 +306,30 @@ export const defaultTheme = presets[0]
 
 export function presetById(id: string): ThemeConfig | undefined {
   return presets.find((presetItem) => presetItem.id === id)
+}
+
+/**
+ * Each preset ships its own scenery, so switching a theme changes the whole
+ * stage instead of just the colours.
+ */
+const scenery: Record<string, ThemeConfig['background']> = {
+  'deep-space': { style: 'grid', intensity: 1, speed: 1 },
+  'polar-night': { style: 'stars', intensity: 1.15, speed: 0.7 },
+  glacier: { style: 'aurora', intensity: 1, speed: 0.8 },
+  'cyber-violet': { style: 'nebula', intensity: 1.2, speed: 1.2 },
+  'sunset-amber': { style: 'bokeh', intensity: 1, speed: 0.75 },
+  'forest-moss': { style: 'waves', intensity: 0.9, speed: 0.8 },
+  'rose-quartz': { style: 'bokeh', intensity: 0.85, speed: 0.6 },
+  vaporwave: { style: 'waves', intensity: 1.25, speed: 1.6 },
+  'abyss-teal': { style: 'stars', intensity: 0.9, speed: 0.5 },
+  magma: { style: 'nebula', intensity: 1.15, speed: 0.9 },
+  graphite: { style: 'grid', intensity: 0.75, speed: 0.7 },
+  paper: { style: 'minimal', intensity: 0.6, speed: 0.5 },
+  'morning-mist': { style: 'minimal', intensity: 0.7, speed: 0.5 },
+  linen: { style: 'aurora', intensity: 0.8, speed: 0.4 },
+  'mint-paper': { style: 'minimal', intensity: 0.65, speed: 0.45 },
+}
+
+for (const preset of presets) {
+  preset.background = scenery[preset.id] ?? preset.background
 }

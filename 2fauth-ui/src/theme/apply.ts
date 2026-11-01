@@ -96,6 +96,8 @@ export function themeToVars(theme: ThemeConfig): Record<string, string> {
     '--otp-size': `${Math.round(27 * typography.scale)}px`,
     '--otp-size-lg': `${Math.round(30 * typography.scale)}px`,
     '--motion': `${motion.duration}ms`,
+    '--bg-intensity': String(theme.background?.intensity ?? 1),
+    '--bg-speed': `${(theme.background?.speed ?? 1).toFixed(2)}`,
     '--otp-glow': `${toRgba(palette.accent, 0.42)}`,
     '--otp-glow-soft': `${toRgba(palette.accent2, 0.32)}`,
   }
@@ -105,6 +107,7 @@ export function themeToVars(theme: ThemeConfig): Record<string, string> {
 export function applyTheme(theme: ThemeConfig, root: HTMLElement = document.documentElement) {
   root.dataset.theme = theme.base
   root.dataset.motion = theme.motion.enabled ? 'on' : 'off'
+  root.dataset.bg = theme.background?.style ?? 'grid'
   for (const [name, value] of Object.entries(themeToVars(theme))) {
     root.style.setProperty(name, value)
   }
@@ -139,6 +142,7 @@ export function parseTheme(text: string): ThemeConfig | null {
       surface: { radius: 18, blur: 22, cardGradient: true, ...(value.surface ?? {}) },
       typography: { sans: defaultFonts.sans, mono: defaultFonts.mono, scale: 1, ...(value.typography ?? {}) },
       motion: { enabled: true, duration: 180, autoRotate: false, ...(value.motion ?? {}) },
+      background: { style: 'grid', intensity: 1, speed: 1, ...(value.background ?? {}) },
     }
   } catch {
     return null

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { Account } from '../api/types'
 import { api } from '../api/client'
+import { useT } from '../i18n'
 import {
   accountLabel,
   accountSubLabel,
@@ -40,6 +41,7 @@ export function AccountCard({
   onOpen,
 }: CardProps) {
   const [revealed, setRevealed] = useState(false)
+  const t = useT()
   const code = account.otp?.password ?? ''
   const remaining = remainingSeconds(account, now)
   const progress = otpProgress(account, now)
@@ -48,19 +50,19 @@ export function AccountCard({
 
   const flags = useMemo(() => {
     const list: { text: string; tone?: 'hot' | 'warn' }[] = []
-    if (account.is_favorite) list.push({ text: 'pinned', tone: 'hot' })
-    if (account.is_borrowed) list.push({ text: `shared · ${account.borrowed_by ?? ''}`.trim() })
-    else if (account.is_shared_with_all) list.push({ text: 'everyone' })
-    else if (account.is_shared) list.push({ text: 'shared' })
+    if (account.is_favorite) list.push({ text: t('Pinned'), tone: 'hot' })
+    if (account.is_borrowed) list.push({ text: t('Borrowed · {name}', { name: account.borrowed_by ?? '' }).trim() })
+    else if (account.is_shared_with_all) list.push({ text: t('Everyone') })
+    else if (account.is_shared) list.push({ text: t('Shared') })
     if (isHotp) list.push({ text: `#${account.counter ?? 0}`, tone: 'warn' })
     return list
-  }, [account, isHotp])
+  }, [account, isHotp, t])
 
   async function copy(event: React.MouseEvent) {
     event.stopPropagation()
     if (!code) return
     const ok = await copyText(code)
-    onCopy(ok ? '已复制验证码' : '复制失败')
+    onCopy(ok ? t('Code copied') : t('Copy failed'))
   }
 
   function select(event: React.MouseEvent) {
@@ -78,7 +80,7 @@ export function AccountCard({
       }}
       tabIndex={0}
       role="button"
-      aria-label={`${accountLabel(account)} — ${hidden ? 'code hidden' : code}`}
+      aria-label={`${accountLabel(account)} — ${hidden ? t('Code hidden') : code}`}
       onKeyDown={(event) => {
         if (event.key === 'Enter') onSelect()
       }}
@@ -104,7 +106,7 @@ export function AccountCard({
       )}
 
       <div className="card-otp">
-        <button className={`otp-digits${hidden ? ' dots' : ''}`} onClick={copy} title="点击复制">
+        <button className={`otp-digits${hidden ? ' dots' : ''}`} onClick={copy} title={t('Copy code')}>
           {displayCode(account, dots, revealed)}
         </button>
         {!isHotp && (
@@ -118,14 +120,14 @@ export function AccountCard({
 
       {showNext && !isHotp && account.otp?.next_password && !compact && (
         <div className="card-next">
-          next <span className="mono">{hidden ? '••••••' : account.otp.next_password}</span>
+          {t('Next')} <span className="mono">{hidden ? '••••••' : account.otp.next_password}</span>
         </div>
       )}
 
       <div className="card-actions">
         <button
           className={`icon-btn${account.is_favorite ? ' on' : ''}`}
-          title="置顶"
+          title={t('Pin')}
           onClick={(event) => {
             event.stopPropagation()
             onFavorite()
@@ -136,7 +138,7 @@ export function AccountCard({
         {dots && (
           <button
             className="icon-btn"
-            title={revealed ? '隐藏' : '显示'}
+            title={revealed ? t('Hide') : t('Show')}
             onClick={(event) => {
               event.stopPropagation()
               setRevealed((value) => !value)
@@ -147,7 +149,7 @@ export function AccountCard({
         )}
         <button
           className="icon-btn"
-          title="详情"
+          title={t('Details')}
           onClick={(event) => {
             event.stopPropagation()
             onOpen()

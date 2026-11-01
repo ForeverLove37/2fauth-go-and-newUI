@@ -44,6 +44,16 @@ export interface MotionConfig {
   autoRotate: boolean
 }
 
+export type BackgroundStyle = 'grid' | 'stars' | 'nebula' | 'waves' | 'aurora' | 'bokeh' | 'minimal'
+
+export interface BackgroundConfig {
+  style: BackgroundStyle
+  /** 0 – 1.6, brightness of the animated scenery */
+  intensity: number
+  /** 0 – 3, animation speed multiplier */
+  speed: number
+}
+
 export interface ThemeConfig {
   id: string
   name: string
@@ -52,6 +62,7 @@ export interface ThemeConfig {
   surface: SurfaceConfig
   typography: TypographyConfig
   motion: MotionConfig
+  background: BackgroundConfig
 }
 
 export interface ThemeProfile {

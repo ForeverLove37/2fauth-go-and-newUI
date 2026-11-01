@@ -1,17 +1,20 @@
 import { useEffect, useState } from 'react'
 import { sso, type KeycloakExport, type SsoPreset, type SsoSettings } from '../api/sso'
 import { download } from '../lib/format'
+import { useT } from '../i18n'
 import { useStore } from '../store/useStore'
 import Icon from './Icon'
 
+/** Export formats; the labels and hints are English message ids resolved with t() at render time. */
 const formats: { id: 'client' | 'partial' | 'cli'; label: string; hint: string }[] = [
-  { id: 'client', label: 'Client JSON', hint: 'Keycloak 管理台 → Clients → Import client' },
-  { id: 'partial', label: 'Realm 导入', hint: 'Realm settings → Partial import' },
-  { id: 'cli', label: 'kcadm 脚本', hint: '用 kcadm.sh 直接创建' },
+  { id: 'client', label: 'Client JSON', hint: 'Keycloak admin console → Clients → Import client' },
+  { id: 'partial', label: 'Realm import', hint: 'Realm settings → Partial import' },
+  { id: 'cli', label: 'kcadm script', hint: 'Create directly with kcadm.sh' },
 ]
 
 /** Admin panel: generic OIDC provider settings plus a one-click Keycloak client export. */
 export default function SsoSettingsPanel() {
+  const t = useT()
   const toast = useStore((state) => state.toast)
   const [settings, setSettings] = useState<SsoSettings | null>(null)
   const [presets, setPresets] = useState<SsoPreset[]>([])
@@ -19,7 +22,7 @@ export default function SsoSettingsPanel() {
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [scopes, setScopes] = useState('openid profile email')
-  const [label, setLabel] = useState('使用 SSO 登录')
+  const [label, setLabel] = useState(t('Sign in with SSO'))
   const [enabled, setEnabled] = useState(false)
   const [autoRegister, setAutoRegister] = useState(true)
   const [autoRedirect, setAutoRedirect] = useState(false)
@@ -50,7 +53,7 @@ export default function SsoSettingsPanel() {
     setIssuer(loaded.issuer)
     setClientId(loaded.client_id)
     setScopes(loaded.scopes || 'openid profile email')
-    setLabel(loaded.label || '使用 SSO 登录')
+    setLabel(loaded.label || t('Sign in with SSO'))
     setEnabled(loaded.enabled)
     setAutoRegister(loaded.auto_register)
     setAutoRedirect(loaded.auto_redirect)
@@ -73,7 +76,7 @@ export default function SsoSettingsPanel() {
       if (clientSecret) payload.client_secret = clientSecret
       const updated = await sso.saveSettings(payload)
       apply(updated)
-      toast('success', 'SSO 配置已保存')
+      toast('success', t('SSO settings saved'))
     } catch (error) {
       setStatus((error as Error).message)
       toast('error', (error as Error).message)
@@ -84,15 +87,15 @@ export default function SsoSettingsPanel() {
 
   async function test() {
     setBusy(true)
-    setStatus('正在探测 .well-known/openid-configuration…')
+    setStatus(t('Probing .well-known/openid-configuration…'))
     try {
       const result = await sso.test()
       if (result.ok && result.discovery) {
-        setStatus(`连接成功：${result.discovery.issuer}`)
-        toast('success', 'OIDC 发现成功')
+        setStatus(t('Connected: {issuer}', { issuer: result.discovery.issuer }))
+        toast('success', t('OIDC discovery succeeded'))
       } else {
-        setStatus(result.error ?? '发现失败')
-        toast('error', result.error ?? 'OIDC 发现失败')
+        setStatus(result.error ?? t('Discovery failed'))
+        toast('error', result.error ?? t('OIDC discovery failed'))
       }
     } catch (error) {
       setStatus((error as Error).message)
@@ -108,7 +111,12 @@ export default function SsoSettingsPanel() {
       const result = await sso.keycloak(format, { realm: realm || undefined, client_id: clientId || undefined })
       setKeycloak(result)
       download(result.filename, result.content, format === 'cli' ? 'text/plain' : 'application/json')
-      toast('success', result.secret_generated ? '已生成并保存新的 client secret' : `已导出 ${result.filename}`)
+      toast(
+        'success',
+        result.secret_generated
+          ? t('New client secret generated and saved')
+          : t('Exported {filename}', { filename: result.filename }),
+      )
     } catch (error) {
       toast('error', (error as Error).message)
     } finally {
@@ -133,18 +141,22 @@ export default function SsoSettingsPanel() {
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h2>单点登录（OIDC）</h2>
-            <p>支持 Keycloak、Authentik、Auth0、Okta、Google、Microsoft Entra、GitLab、Authelia 等标准 OpenID Provider。</p>
+            <h2>{t('Single sign-on (OIDC)')}</h2>
+            <p>
+              {t(
+                'Works with any standard OpenID Provider: Keycloak, Authentik, Auth0, Okta, Google, Microsoft Entra, GitLab, Authelia and more.',
+              )}
+            </p>
           </div>
           <label className="right flex" style={{ gap: 8 }}>
-            <span className="hint">{enabled ? '已启用' : '已停用'}</span>
+            <span className="hint">{enabled ? t('Enabled') : t('Disabled')}</span>
             <button className={`toggle${enabled ? ' on' : ''}`} onClick={() => setEnabled(!enabled)} aria-pressed={enabled} />
           </label>
         </div>
         <div className="panel-body">
           {presets.length > 0 && (
             <div className="field">
-              <label>快速填入服务商模板</label>
+              <label>{t('Fill from a provider preset')}</label>
               <div className="flex wrap">
                 {presets.map((preset) => (
                   <button key={preset.id} className="chip" onClick={() => applyPreset(preset)} title={preset.hint}>
@@ -174,11 +186,11 @@ export default function SsoSettingsPanel() {
               <input className="input mono" value={clientId} onChange={(event) => setClientId(event.target.value)} />
             </div>
             <div className="field">
-              <label>Client secret {settings?.client_secret_set ? '（已配置，留空则不修改）' : ''}</label>
+              <label>{settings?.client_secret_set ? t('Client secret (set, leave empty to keep it)') : t('Client secret')}</label>
               <input
                 className="input mono"
                 type="password"
-                placeholder={settings?.client_secret_set ? '••••••••' : '未配置'}
+                placeholder={settings?.client_secret_set ? '••••••••' : t('Not set')}
                 value={clientSecret}
                 onChange={(event) => setClientSecret(event.target.value)}
               />
@@ -187,52 +199,52 @@ export default function SsoSettingsPanel() {
 
           <div className="row">
             <div className="field">
-              <label>Scopes</label>
+              <label>{t('Scopes')}</label>
               <input className="input mono" value={scopes} onChange={(event) => setScopes(event.target.value)} />
             </div>
             <div className="field">
-              <label>登录按钮文案</label>
+              <label>{t('Login button label')}</label>
               <input className="input" value={label} onChange={(event) => setLabel(event.target.value)} />
             </div>
           </div>
 
           <div className="field">
-            <label>回调地址（在 IdP 中登记）</label>
+            <label>{t('Callback URL (register it at the IdP)')}</label>
             <div className="flex">
               <input className="input mono grow" readOnly value={settings?.redirect_uri ?? ''} />
               <button
                 className="btn small"
                 onClick={() => {
                   void navigator.clipboard?.writeText(settings?.redirect_uri ?? '')
-                  toast('success', '已复制回调地址')
+                  toast('success', t('Callback URL copied'))
                 }}
               >
-                <Icon name="copy" size={14} /> 复制
+                <Icon name="copy" size={14} /> {t('Copy')}
               </button>
             </div>
           </div>
 
           <div className="switch">
             <div className="switch-label">
-              允许自动创建账号
-              <small>用户首次通过 SSO 登录时，按邮箱自动建立账号</small>
+              {t('Create accounts automatically')}
+              <small>{t('Create the account from the e-mail address on the first SSO sign-in')}</small>
             </div>
             <button className={`toggle${autoRegister ? ' on' : ''}`} onClick={() => setAutoRegister(!autoRegister)} />
           </div>
           <div className="switch">
             <div className="switch-label">
-              打开登录页时自动跳转 IdP
-              <small>只保留 SSO 登录时很有用</small>
+              {t('Redirect to the IdP from the login page')}
+              <small>{t('Useful when SSO is the only way in')}</small>
             </div>
             <button className={`toggle${autoRedirect ? ' on' : ''}`} onClick={() => setAutoRedirect(!autoRedirect)} />
           </div>
 
           <div className="flex wrap" style={{ marginTop: 14 }}>
             <button className="btn primary small" onClick={save} disabled={busy}>
-              <Icon name="check" size={14} /> 保存配置
+              <Icon name="check" size={14} /> {t('Save settings')}
             </button>
             <button className="btn small" onClick={test} disabled={busy || !issuer}>
-              <Icon name="refresh" size={14} /> 测试连接
+              <Icon name="refresh" size={14} /> {t('Test connection')}
             </button>
             {clientSecret && (
               <button
@@ -241,7 +253,7 @@ export default function SsoSettingsPanel() {
                   setBusy(true)
                   try {
                     apply(await sso.saveSettings({ clear_secret: true }))
-                    toast('success', '已清除 client secret')
+                    toast('success', t('Client secret cleared'))
                   } catch (error) {
                     toast('error', (error as Error).message)
                   } finally {
@@ -250,7 +262,7 @@ export default function SsoSettingsPanel() {
                 }}
                 disabled={busy}
               >
-                清除 secret
+                {t('Clear secret')}
               </button>
             )}
           </div>
@@ -261,14 +273,18 @@ export default function SsoSettingsPanel() {
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h2>Keycloak 一键接入</h2>
-            <p>生成可直接导入 Keycloak 的 client 配置；首次生成会自动创建并保存 client secret。</p>
+            <h2>{t('One-click Keycloak setup')}</h2>
+            <p>
+              {t(
+                'Generate a client configuration you can import straight into Keycloak; the first run creates and saves a client secret.',
+              )}
+            </p>
           </div>
         </div>
         <div className="panel-body">
           <div className="row">
             <div className="field">
-              <label>Realm（可留空，从 Issuer 推断）</label>
+              <label>{t('Realm (optional, inferred from the Issuer)')}</label>
               <input className="input mono" value={realm} onChange={(event) => setRealm(event.target.value)} placeholder="main" />
             </div>
             <div className="field">
@@ -279,8 +295,14 @@ export default function SsoSettingsPanel() {
 
           <div className="flex wrap">
             {formats.map((format) => (
-              <button key={format.id} className="btn small" onClick={() => void exportKeycloak(format.id)} disabled={busy} title={format.hint}>
-                <Icon name="download" size={14} /> {format.label}
+              <button
+                key={format.id}
+                className="btn small"
+                onClick={() => void exportKeycloak(format.id)}
+                disabled={busy}
+                title={t(format.hint)}
+              >
+                <Icon name="download" size={14} /> {t(format.label)}
               </button>
             ))}
           </div>
@@ -289,7 +311,9 @@ export default function SsoSettingsPanel() {
             <div className="panel" style={{ marginTop: 14, padding: 14 }}>
               <div className="flex">
                 <strong className="mono small">{keycloak.filename}</strong>
-                <span className="right hint">{keycloak.secret_generated ? '已生成新 secret 并保存' : '使用已保存的 secret'}</span>
+                <span className="right hint">
+                  {keycloak.secret_generated ? t('New secret generated and saved') : t('Using the saved secret')}
+                </span>
               </div>
               <p className="hint" style={{ margin: '8px 0' }}>{keycloak.notice}</p>
               <textarea readOnly value={keycloak.content} style={{ minHeight: 160 }} />
