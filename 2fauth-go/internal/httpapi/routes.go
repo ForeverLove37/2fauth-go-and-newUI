@@ -16,8 +16,18 @@ func (s *Server) registerRoutes() {
 	s.add(http.MethodGet, "up", s.healthPage)
 
 	// --- socialite ----------------------------------------------------------
+	// Only the OpenID Connect driver is implemented; any other driver answers
+	// 501 like the pre-SSO build did.
 	s.add(http.MethodGet, "socialite/redirect/{driver}", s.socialiteRedirect)
 	s.add(http.MethodGet, "socialite/callback/{driver}", s.socialiteCallback)
+
+	// --- single sign-on (OpenID Connect) ------------------------------------
+	s.add(http.MethodGet, "api/v1/sso/config", s.ssoConfig)
+	s.addAdmin(http.MethodGet, "api/v1/sso/settings", s.showSSOSettings)
+	s.addAdmin(http.MethodPut, "api/v1/sso/settings", s.updateSSOSettings)
+	s.addAdmin(http.MethodPost, "api/v1/sso/test", s.testSSO)
+	s.addAdmin(http.MethodGet, "api/v1/sso/presets", s.showSSOPresets)
+	s.addAdmin(http.MethodGet, "api/v1/sso/keycloak-client", s.keycloakClient)
 
 	// --- authenticated user -------------------------------------------------
 	s.addAuth(http.MethodPut, "user", s.updateUser)

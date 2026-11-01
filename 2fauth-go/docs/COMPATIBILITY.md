@@ -17,6 +17,28 @@ JSON resources of the PHP implementation). Status legend:
 | `GET /favicon.svg` | ➕ | panel icon |
 | `GET /api/v1/frontend-config` | ➕ | public JSON bootstrap used by the panel (`appName`, `appVersion`, `subdirectory`, `isDemoApp`, `sso`, `appSettings`, `features`). Purely additive: the Vue SPA never calls it. |
 
+## Single sign-on (additions, outside the PHP contract)
+
+OpenID Connect is implemented as a generic authorization-code flow with PKCE and
+discovery. Configuration lives in `OIDC_*` environment variables (deployment
+defaults) and in admin-editable `openid.*` runtime settings, which take
+precedence; the client secret is stored encrypted (`v1:` + payload) and never
+returned by any endpoint.
+
+| Route | Status | Notes |
+| --- | --- | --- |
+| `GET /api/v1/sso/config` | ➕ | public: effective enablement, label, `auto_redirect`/`auto_register`, issuer, `redirect_uri`, `start_url`, discovery endpoints, human readable `error` when the issuer cannot be discovered. Never exposes the client secret. |
+| `GET /socialite/redirect/openid` | ➕ | starts the flow: encrypted `oidc_tx` cookie (`state`, `nonce`, PKCE verifier), 302 to the provider; `?format=json` answers `{"url": …}` |
+| `GET /socialite/callback/openid` | ➕ | validates `state`, exchanges the code, resolves the account (identity → same e-mail → auto-registration), rotates the session, logs the authentication; failures 302 to `/login?sso_error=<cancelled\|state\|provider\|exchange\|userinfo\|email\|register_disabled\|account\|server>` |
+| `GET /api/v1/sso/settings` | ➕ | admin: `enabled`, `issuer`, `client_id`, `client_secret_set`, `scopes`, `label`, `auto_register`, `auto_redirect`, `redirect_uri` |
+| `PUT /api/v1/sso/settings` | ➕ | admin: partial update (`enabled`, `issuer`, `client_id`, `client_secret`, `clear_secret`, `scopes`, `label`, `auto_register`, `auto_redirect`), 422 on an invalid issuer |
+| `POST /api/v1/sso/test` | ➕ | admin: runs discovery, `{"ok":true,"discovery":…}` or `422 {"ok":false,"error":…}` |
+| `GET /api/v1/sso/presets` | ➕ | admin: static catalogue (keycloak, authentik, auth0, okta, google, entra, gitlab, authelia) |
+| `GET /api/v1/sso/keycloak-client` | ➕ | admin: importable Keycloak client (`format=client\|partial\|cli`), generates and persists a 40-character client secret when none is stored |
+
+`openid.*` options are hidden from the generic `GET /api/v1/settings` listing and
+`GET /api/v1/settings/{name}`, which keep serving only the upstream setting names.
+
 ## Public
 
 | Route | Status | Notes |
@@ -30,7 +52,7 @@ JSON resources of the PHP implementation). Status legend:
 | `GET /refresh-csrf` | ✅ | returns the token as a JSON string |
 | `GET /manifest.json` | ✅ | |
 | `GET /up` | ✅ | static health page |
-| `GET /socialite/{redirect,callback}/{driver}` | ❌ | 501 |
+| `GET /socialite/{redirect,callback}/{driver}` | ✅ | OpenID Connect only (see the SSO table above); any other driver, including GitHub OAuth, still answers `501` |
 | `POST /webauthn/login/options`, `POST /webauthn/login` | ❌ | 501 |
 | `POST /webauthn/lost`, `POST /webauthn/recover` | ❌ | 501 |
 
@@ -130,6 +152,14 @@ JSON resources of the PHP implementation). Status legend:
   native timestamp columns on MySQL/PostgreSQL.
 * **Throttling** is in-process (sliding window), not shared between instances.
 * **OTP values** are computed locally; no external service is involved.
+* **SSO (OpenID Connect)** links external accounts through the `oauth_identities`
+  table (`UNIQUE(provider, subject)`); the same identity always resolves to the
+  same user, an existing account is matched by e-mail (case insensitive) and
+  auto-registration honours `disableRegistration`. Provider documents are cached
+  in memory for 30 minutes, outbound requests honour `HTTP_PROXY`/`HTTPS_PROXY`
+  and certificate verification is never disabled.
+* **Client secret at rest**: stored as `v1:<Laravel payload>` encrypted with
+  `APP_KEY`, decrypted on use, and never included in an API response.
 
 ## Notes on the React panel
 

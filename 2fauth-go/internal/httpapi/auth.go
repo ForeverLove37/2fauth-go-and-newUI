@@ -219,17 +219,6 @@ func (s *Server) passwordReset(c *ctx) {
 	})
 }
 
-// socialiteRedirect handles SSO redirects; SSO providers are not configured in
-// this build, so the endpoint reports the missing configuration.
-func (s *Server) socialiteRedirect(c *ctx) {
-	jsonMessage(c.w, http.StatusNotImplemented, "SSO is not configured")
-}
-
-// socialiteCallback handles the SSO callback.
-func (s *Server) socialiteCallback(c *ctx) {
-	jsonMessage(c.w, http.StatusNotImplemented, "SSO is not configured")
-}
-
 // listPersonalAccessTokens handles GET /oauth/personal-access-tokens.
 func (s *Server) listPersonalAccessTokens(c *ctx) {
 	if !s.patAllowed(c) {

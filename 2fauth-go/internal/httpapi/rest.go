@@ -311,6 +311,11 @@ func (s *Server) lookupGroup(c *ctx) (*store.Group, bool) {
 func (s *Server) listSettings(c *ctx) {
 	out := make([]map[string]any, 0)
 	for _, key := range s.settings.Keys() {
+		// The OpenID Connect settings (including the client secret) are exposed
+		// through /api/v1/sso/settings only.
+		if isSSOSettingKey(key) {
+			continue
+		}
 		out = append(out, map[string]any{"key": key, "value": s.settings.Get(key)})
 	}
 	jsonResponse(c.w, http.StatusOK, out)
@@ -321,6 +326,12 @@ func (s *Server) showSetting(c *ctx) {
 	name := c.param("settingName")
 	value := s.settings.Get(name)
 	if value == nil && !s.settings.Exists(name) {
+		jsonMessage(c.w, http.StatusNotFound, "not found")
+		return
+	}
+	if isSSOSettingKey(name) {
+		// The SSO configuration is served by /api/v1/sso/settings, which never
+		// returns the (encrypted) client secret.
 		jsonMessage(c.w, http.StatusNotFound, "not found")
 		return
 	}

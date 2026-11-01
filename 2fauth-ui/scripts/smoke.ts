@@ -66,13 +66,31 @@ async function main() {
   const { Login } = await import('../src/views/Auth')
 
   // fake API: no network in jsdom
-  let calls = 0
-  globals.fetch = async () => {
-    calls += 1
+  const requests: string[] = []
+  globals.fetch = async (input: unknown) => {
+    const url = typeof input === 'string' ? input : String((input as { url?: string }).url ?? input)
+    requests.push(url)
+    let payload: unknown = { data: [] }
+    if (url.includes('/api/v1/sso/config')) {
+      payload = {
+        enabled: true,
+        provider: 'openid',
+        label: '用公司账号登录',
+        auto_redirect: false,
+        auto_register: true,
+        issuer: 'https://idp.example.com',
+        redirect_uri: 'http://localhost/socialite/callback/openid',
+        start_url: '/socialite/redirect/openid',
+        discovery: { issuer: 'https://idp.example.com', authorization_endpoint: 'https://idp.example.com/auth', token_endpoint: 'https://idp.example.com/token' },
+        error: null,
+      }
+    } else if (url.includes('/socialite/redirect/openid')) {
+      payload = { url: 'https://idp.example.com/auth?state=xyz' }
+    }
     return {
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ data: [] }),
+      text: async () => JSON.stringify(payload),
       headers: { get: () => 'application/json' },
     }
   }
@@ -143,12 +161,31 @@ async function main() {
   const loginHost = window.document.createElement('div')
   window.document.body.appendChild(loginHost)
   createRoot(loginHost).render(createElement(MemoryRouter, null, createElement(Login)))
-  await tick(120)
+  await tick(150)
   assert('login form rendered', loginHost.querySelectorAll('input').length >= 2)
+  const ssoButton = [...loginHost.querySelectorAll('button')].find((element) =>
+    element.textContent?.includes('用公司账号登录'),
+  ) as HTMLButtonElement | undefined
+  assert('SSO button rendered from /api/v1/sso/config', Boolean(ssoButton))
+  ssoButton?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(120)
+  assert(
+    'clicking SSO asks the server for the authorize URL',
+    requests.some((url) => url.includes('/socialite/redirect/openid')),
+  )
+
+  // ?sso_error=state surfaces a readable message
+  const errorHost = window.document.createElement('div')
+  window.document.body.appendChild(errorHost)
+  createRoot(errorHost).render(
+    createElement(MemoryRouter, { initialEntries: ['/login?sso_error=state'] }, createElement(Login)),
+  )
+  await tick(150)
+  assert('sso_error is explained on the login page', errorHost.textContent?.includes('SSO 会话已失效') === true)
 
   assert('no runtime errors', errors.length === 0)
   if (errors.length) console.error(errors.slice(0, 5))
-  console.log(`api calls during smoke: ${calls}`)
+  console.log(`api calls during smoke: ${requests.length}`)
 }
 
 function tick(ms: number) {

@@ -213,6 +213,11 @@ func (s *Store) TouchLastSeen(id int64) {
 
 // DeleteUser removes a user and every owned record.
 func (s *Store) DeleteUser(id int64) error {
+	// Do not rely on ON DELETE CASCADE: SQLite only enforces foreign keys when
+	// the connection enables the pragma.
+	if err := s.DeleteOAuthIdentitiesByUser(id); err != nil {
+		return err
+	}
 	_, err := s.DB.Exec(`DELETE FROM users WHERE id = ?`, id)
 	return err
 }

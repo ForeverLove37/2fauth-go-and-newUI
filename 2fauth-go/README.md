@@ -18,11 +18,12 @@ no Laravel, no `artisan`.
 Two front-ends are served by the same binary:
 
 * **`/`** — the modern **React + TypeScript + React Three Fiber** panel in
-  [`../2fauth-ui`](../2fauth-ui). Accounts orbit on a 3D ring, the focused card
-  shows a large code with a countdown ring; drag to rotate, wheel/←→ to switch,
-  `C` to copy. Includes account CRUD with QR decoding, import/export, groups,
-  sharing, preferences, personal access tokens, passkey listing and the admin
-  console.
+  [`../2fauth-ui`](../2fauth-ui): 15 preset themes with a full appearance editor,
+  and seven display modes (3D 环绕 / 螺旋 / 卡墙 / 球面, a 3D+2D hybrid, 2D grid and
+  list). 3D layouts place every card in space and keep its code readable, with
+  free X/Y rotation, inertia, wheel zoom and auto-rotate. Includes account CRUD
+  with QR decoding, import/export, groups, sharing, preferences, personal access
+  tokens, passkey listing, OIDC sign-in and the admin console.
 * **`/legacy`** — the unmodified upstream Vue 3 SPA (`public/build`), kept as a
   reference and fallback whenever the React bundle is not deployed.
 
@@ -44,6 +45,7 @@ Implemented and verified end to end against the shipped SPA:
 | Groups | CRUD, ordering, `show_in_chips`, assign accounts, per-group listing |
 | Sharing | per-user shares, `is_borrowed`/`borrowed_by`, share with all users scope, recipients listing, borrowed OTP generation, OTP generation logs |
 | Users & auth | register (first user is admin), login, logout, profile update, password change, session cookie + `XSRF-TOKEN`/`X-XSRF-TOKEN` (419 on mismatch), 418 on idle, login throttling (429), personal access tokens (`Authorization: Bearer`, stored hashed) |
+| SSO | generic **OpenID Connect** login (authorization code + PKCE + nonce, `state` in an encrypted cookie), discovery from `.well-known/openid-configuration`, account resolution by identity → e-mail → optional auto-registration, admin API, provider presets (Keycloak, Authentik, Auth0, Okta, Google, Microsoft Entra, GitLab, Authelia) and a one-click importable **Keycloak client JSON** export |
 | Administration | user list/show/create/delete, promote/demote, password reset, revoke PATs and credentials, authentication logs, app settings CRUD, system infos, release radar, cache/optimize stubs |
 | Icons | upload, delete, serve from `/storage/icons/*`, default-icon fetch, icon packs listing |
 | Storage | SQLite (pure Go `modernc.org/sqlite`, default), MySQL and PostgreSQL through the same schema |
@@ -58,6 +60,42 @@ Implemented and verified end to end against the shipped SPA:
 | `/build/*`, `/storage/*` | legacy SPA assets and icons | unchanged |
 | `/api/v1/frontend-config` | public bootstrap for the React panel | `{appName, appVersion, subdirectory, isDemoApp, sso, appSettings, features}` |
 
+### Single sign-on (OIDC)
+
+One generic OpenID Provider is enough for every mainstream IdP, because the
+discovery document is the only thing we need:
+
+```bash
+# .env — or configure it at runtime from the panel (Settings → 单点登录)
+OIDC_ENABLED=true
+OIDC_ISSUER=https://keycloak.example.com/realms/main   # Authentik: https://idp/application/o/2fauth/
+OIDC_CLIENT_ID=2fauth
+OIDC_CLIENT_SECRET=...                                  # optional: the panel can generate one
+OIDC_SCOPES="openid profile email"
+OIDC_BUTTON_LABEL="Sign in with SSO"
+```
+
+Flow: `GET /socialite/redirect/openid` stores `state`, `nonce` and the PKCE
+verifier in an encrypted `oidc_tx` cookie and redirects to the provider;
+`GET /socialite/callback/openid` validates the state, exchanges the code
+(`client_secret_post`, HTTP Basic fallback), reads the userinfo, resolves the
+account and creates the session (`418`/`419` semantics unchanged). Failures land
+on `/login?sso_error=<code>` and the panel explains each code.
+
+**Keycloak in one step** — the admin panel (or the API) generates a client file
+that Keycloak imports as-is:
+
+```bash
+curl -b cookies -H "X-XSRF-TOKEN: $TOKEN" \
+  'http://localhost:8000/api/v1/sso/keycloak-client?format=client&realm=main' | jq -r .content > keycloak-2fauth.json
+# Keycloak admin console → Clients → Import client → keycloak-2fauth.json
+# (format=partial → Realm settings → Partial import, format=cli → kcadm.sh script)
+```
+
+If no client secret is stored yet, the export generates a 40-character secret,
+persists it encrypted in the database and uses it in the file, so the printed
+redirect URI and the secret match immediately.
+
 ### Not implemented
 
 These endpoints exist but answer `501 Not Implemented` (or a stub) instead of
@@ -65,7 +103,8 @@ performing work:
 
 * **WebAuthn / passkeys** — `/webauthn/*`. Credential management endpoints work,
   registration and assertion are stubs.
-* **SSO** — `/socialite/*`. No OpenID Connect or GitHub OAuth flow.
+* **GitHub OAuth** — `/socialite/*/github`. OpenID Connect works (see below), the
+  GitHub driver still answers `501`.
 * **E-mail** — password reset mails and the admin "test e-mail" button do not send
   anything; `/user/password/lost` and `/user/password/reset` answer success
   without side effects.

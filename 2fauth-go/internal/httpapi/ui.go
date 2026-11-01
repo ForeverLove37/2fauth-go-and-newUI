@@ -109,7 +109,9 @@ func (s *Server) frontendConfig(c *ctx) {
 		"subdirectory": s.cfg.Subdirectory,
 		"isDemoApp":    s.cfg.IsDemoApp,
 		"sso": map[string]any{
-			"openid": s.cfg.OpenIDClientSecret != "",
+			// Effective enablement of the OpenID Connect provider: the runtime
+			// settings win over the OIDC_* environment variables.
+			"openid": s.openIDEnabled(),
 			"github": s.cfg.GithubClientSecret != "",
 		},
 		"appSettings": s.settings.ForVisitor(),

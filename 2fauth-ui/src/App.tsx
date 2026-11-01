@@ -32,6 +32,7 @@ export default function App() {
   const ready = useStore((state) => state.ready)
   const user = useStore((state) => state.user)
   const themeBase = useThemeStore((state) => state.theme.base)
+  const accent = useThemeStore((state) => state.theme.palette.accent)
   const navigate = useNavigate()
   const toast = useStore((state) => state.toast)
 
@@ -55,7 +56,7 @@ export default function App() {
 
   return (
     <>
-      <Backdrop light={themeBase === 'light'} />
+      <Backdrop light={themeBase === 'light'} accent={accent} />
       <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/register" element={user ? <Navigate to="/" replace /> : <Register />} />
