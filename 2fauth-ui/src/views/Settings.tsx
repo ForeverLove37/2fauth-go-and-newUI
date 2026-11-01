@@ -4,6 +4,7 @@ import { api } from '../api/client'
 import type { ApiError, ManagedUser, PersonalAccessToken, WebAuthnCredential } from '../api/types'
 import Icon from '../components/Icon'
 import ThemeEditor from './ThemeEditor'
+import IconProvidersPanel from '../components/IconProvidersPanel'
 import SsoSettingsPanel from '../components/SsoSettingsPanel'
 import { useI18nStore, useT } from '../i18n'
 import { useStore } from '../store/useStore'
@@ -516,6 +517,8 @@ function AdminTab() {
           />
         </div>
       </div>
+
+      <IconProvidersPanel />
 
       <div className="panel">
         <div className="panel-head">

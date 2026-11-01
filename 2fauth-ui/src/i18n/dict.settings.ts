@@ -128,4 +128,20 @@ export const settings: Record<string, string> = {
   'Realm settings → Partial import': 'Realm settings → 部分导入',
   'kcadm script': 'kcadm 脚本',
   'Create directly with kcadm.sh': '用 kcadm.sh 直接创建',
+
+  // icon libraries
+  'Icon libraries': '图标库',
+  'When an icon is fetched the libraries are tried in order; the first hit wins and the rest act as fallbacks.':
+    '获取图标时按顺序依次尝试这些图标库，命中即停止，其余作为兜底。',
+  Order: '顺序',
+  Library: '图标库',
+  Source: '来源',
+  'Move up': '上移',
+  'Move down': '下移',
+  'Libraries to try: {count}': '尝试的图标库数量：{count}',
+  'Only these many libraries are queried; the default icon is used when all of them miss.':
+    '只查询这么多图标库；全部都没有命中时才使用默认图标。',
+  'Save libraries': '保存图标库设置',
+  'Keep at least one icon library enabled': '至少要保留一个启用的图标库',
+  'Icon libraries updated': '图标库设置已更新',
 }

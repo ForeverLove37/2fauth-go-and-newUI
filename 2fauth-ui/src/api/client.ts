@@ -82,6 +82,22 @@ function fromEnvelope<T>(payload: { data: T }): T {
   return payload.data
 }
 
+export interface IconProvider {
+  id: string
+  label: string
+  source: string
+  template: string
+  enabled: boolean
+  order: number
+  status?: string
+}
+
+export interface IconProvidersResponse {
+  providers: IconProvider[]
+  max_tries: number
+  all?: IconProvider[]
+}
+
 export const api = {
   config: () => get<FrontendConfig>(`${API}/frontend-config`),
 
@@ -205,6 +221,9 @@ export const api = {
     form.append('icon', file)
     return request<{ icon: string; url: string }>('POST', `${API}/icons`, { form })
   },
+  iconProviders: () => get<IconProvidersResponse>(`${API}/icons/providers`),
+  setIconProviders: (payload: { providers: string[]; max_tries: number }) =>
+    put<IconProvidersResponse>(`${API}/icons/providers`, payload),
   iconUrl: (icon: string | null) => (icon ? `/storage/icons/${icon}` : ''),
 }
 
