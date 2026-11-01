@@ -5,12 +5,13 @@ import type { ApiError, ManagedUser, PersonalAccessToken, WebAuthnCredential } f
 import Icon from '../components/Icon'
 import ThemeEditor from './ThemeEditor'
 import SsoSettingsPanel from '../components/SsoSettingsPanel'
-import { useT } from '../i18n'
+import { useI18nStore, useT } from '../i18n'
 import { useStore } from '../store/useStore'
 
 type Tab = 'theme' | 'options' | 'account' | 'security' | 'sso' | 'admin'
 
-const languages = ['browser', 'en', 'fr', 'de', 'es-ES', 'it', 'nl', 'pt-BR', 'ru', 'zh-CN', 'zh-TW', 'ja', 'ko', 'tr', 'bg', 'da', 'hi']
+/** Locales that actually ship a catalogue; anything else falls back to English. */
+const languages = ['browser', 'en', 'zh-CN', 'zh-TW']
 
 /** User preferences, account settings, security and administration. */
 export default function Settings() {
@@ -100,6 +101,7 @@ function OptionsTab({
   setPreference: (key: string, value: unknown) => Promise<void>
 }) {
   const t = useT()
+  const setLocale = useI18nStore((state) => state.setLocale)
   const isLocked = (key: string) => locked.includes(key)
   return (
     <div className="panel">
@@ -117,7 +119,10 @@ function OptionsTab({
               className="select"
               value={String(prefs.lang ?? 'browser')}
               disabled={isLocked('lang')}
-              onChange={(event) => void setPreference('lang', event.target.value)}
+              onChange={(event) => {
+                setLocale(event.target.value)
+                void setPreference('lang', event.target.value)
+              }}
             >
               {languages.map((language) => (
                 <option key={language} value={language}>
