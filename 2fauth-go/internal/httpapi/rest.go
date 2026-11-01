@@ -2,11 +2,14 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +18,7 @@ import (
 	"github.com/makiuchi-d/gozxing/qrcode"
 
 	"2fauth/internal/otp"
+	"2fauth/internal/services"
 	"2fauth/internal/store"
 )
 
@@ -48,22 +52,181 @@ func (s *Server) iconPacks(c *ctx) {
 	jsonResponse(c.w, http.StatusOK, map[string]any{"packs": s.icons.LogoPacks()})
 }
 
-// iconFetch handles POST /api/v1/icons/default.
+// iconFetch handles POST /api/v1/icons/default. The service name is resolved
+// through the configured provider chain; the first provider that answers wins and
+// a total miss answers 404 (never a 500).
 func (s *Server) iconFetch(c *ctx) {
 	v := newValidator(c)
 	service := v.required("service")
 	if v.respond() {
 		return
 	}
-	name := s.icons.BuildFromOfficialLogo(service)
-	if name == "" {
+	res, err := s.icons.FetchIcon(c.r.Context(), service)
+	switch {
+	case errors.Is(err, services.ErrIconNotFound), err == nil && res == nil:
+		// Every attempted provider missed: this is a 4xx, never a 500.
 		jsonMessage(c.w, http.StatusNotFound, "Icon not found for this service")
+	case err != nil:
+		// Only a storage failure reaches this branch: provider failures are
+		// reported as a miss by the service.
+		jsonMessage(c.w, http.StatusInternalServerError, "server error")
+	default:
+		jsonResponse(c.w, http.StatusOK, map[string]any{
+			"icon":     res.Name,
+			"url":      s.baseURL() + "/storage/icons/" + res.Name,
+			"provider": res.Provider,
+		})
+	}
+}
+
+// iconProviders handles GET /api/v1/icons/providers. It never performs network
+// calls: it only reports the configuration.
+func (s *Server) iconProviders(c *ctx) {
+	jsonResponse(c.w, http.StatusOK, s.iconProvidersPayload())
+}
+
+// updateIconProviders handles PUT /api/v1/icons/providers (admin).
+func (s *Server) updateIconProviders(c *ctx) {
+	v := newValidator(c)
+	ids := parseProvidersField(c, v)
+
+	// max_tries is optional: when it is omitted the current value is kept, so a
+	// caller can reorder the chain without having to echo the limit back.
+	maxTries := s.icons.Chain().MaxTries
+	field := "max_tries"
+	if !c.hasInput(field) && c.hasInput("maxTries") {
+		field = "maxTries"
+	}
+	if c.hasInput(field) {
+		n, ok := v.integer(field)
+		switch {
+		case !ok:
+			// integer() already reported the failure.
+		case n < 1 || n > services.ProviderCount:
+			v.fail(field, fmt.Sprintf("The %s field must be between 1 and %d.", field, services.ProviderCount))
+		default:
+			maxTries = n
+		}
+	}
+	if v.respond() {
 		return
 	}
-	jsonResponse(c.w, http.StatusOK, map[string]any{
-		"icon": name,
-		"url":  s.baseURL() + "/storage/icons/" + name,
+	if err := s.icons.SetChain(ids, maxTries); err != nil {
+		jsonMessage(c.w, http.StatusInternalServerError, "server error")
+		return
+	}
+	jsonResponse(c.w, http.StatusOK, s.iconProvidersPayload())
+}
+
+// parseProvidersField reads and validates the "providers" field of
+// PUT /api/v1/icons/providers. It accepts a JSON array or a comma separated
+// string and reports a Laravel-like error per invalid entry.
+func parseProvidersField(c *ctx, v *validator) []string {
+	if !c.hasInput("providers") {
+		v.fail("providers", "The providers field is required.")
+		return nil
+	}
+
+	var entries []string
+	switch raw := c.json()["providers"].(type) {
+	case []any:
+		for _, item := range raw {
+			entries = append(entries, toString(item))
+		}
+	case nil:
+		// A body sent as a form still carries "providers" as a string.
+		for _, part := range strings.Split(c.input("providers"), ",") {
+			entries = append(entries, part)
+		}
+	default:
+		entries = strings.Split(toString(raw), ",")
+	}
+
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(entries))
+	for idx, entry := range entries {
+		id := strings.ToLower(strings.TrimSpace(entry))
+		if id == "" {
+			continue
+		}
+		if !services.IsKnownIconProvider(id) {
+			v.fail(fmt.Sprintf("providers.%d", idx),
+				fmt.Sprintf("The selected providers.%d is invalid.", idx))
+			continue
+		}
+		if seen[id] {
+			v.fail(fmt.Sprintf("providers.%d", idx),
+				fmt.Sprintf("The providers.%d field must have a distinct value.", idx))
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if !v.failed() && (len(ids) < 1 || len(ids) > services.ProviderCount) {
+		v.fail("providers", fmt.Sprintf("The providers field must have between 1 and %d items.", services.ProviderCount))
+	}
+	return ids
+}
+
+// iconProvidersPayload is the answer shared by GET and PUT
+// /api/v1/icons/providers.
+func (s *Server) iconProvidersPayload() map[string]any {
+	chain := s.icons.Chain()
+
+	providers := make([]map[string]any, 0, services.ProviderCount)
+	all := make([]map[string]any, 0, services.ProviderCount)
+	enabledAt := make(map[string]int, len(chain.Enabled))
+	for idx, id := range chain.Enabled {
+		enabledAt[id] = idx
+	}
+	for _, p := range s.icons.Providers() {
+		pos, enabled := enabledAt[p.ID]
+		status := "disabled"
+		order := 0
+		if enabled {
+			// the position in the configured chain, even beyond max_tries, so a
+			// client can always render the chain in the order it was saved
+			order = pos + 1
+			if pos < chain.MaxTries {
+				status = "available"
+			} else {
+				// enabled but beyond max_tries: configured, never attempted
+				status = "skipped"
+			}
+		}
+		providers = append(providers, map[string]any{
+			"id":       p.ID,
+			"label":    p.Label,
+			"source":   p.Source,
+			"template": p.Template,
+			"enabled":  enabled,
+			"order":    order,
+			"status":   status,
+		})
+		all = append(all, map[string]any{
+			"id":       p.ID,
+			"label":    p.Label,
+			"source":   p.Source,
+			"template": p.Template,
+		})
+	}
+
+	// enabled providers first, in chain order, then the disabled ones
+	sort.SliceStable(providers, func(a, b int) bool {
+		left, right := providers[a], providers[b]
+		leftEnabled, _ := left["enabled"].(bool)
+		rightEnabled, _ := right["enabled"].(bool)
+		if leftEnabled != rightEnabled {
+			return leftEnabled
+		}
+		return toInt(left["order"]) < toInt(right["order"])
 	})
+
+	return map[string]any{
+		"providers": providers,
+		"max_tries": chain.MaxTries,
+		"all":       all,
+	}
 }
 
 // iconUpload handles POST /api/v1/icons.
@@ -754,3 +917,14 @@ func (s *Server) shareCreationTimes(accountID int64) map[int64]*time.Time {
 
 var _ = json.Marshal
 var _ = otp.TypeTOTP
+
+func toInt(v any) int {
+	switch value := v.(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}

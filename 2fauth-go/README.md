@@ -47,7 +47,7 @@ Implemented and verified end to end against the shipped SPA:
 | Users & auth | register (first user is admin), login, logout, profile update, password change, session cookie + `XSRF-TOKEN`/`X-XSRF-TOKEN` (419 on mismatch), 418 on idle, login throttling (429), personal access tokens (`Authorization: Bearer`, stored hashed) |
 | SSO | generic **OpenID Connect** login (authorization code + PKCE + nonce, `state` in an encrypted cookie), discovery from `.well-known/openid-configuration`, account resolution by identity → e-mail → optional auto-registration, admin API, provider presets (Keycloak, Authentik, Auth0, Okta, Google, Microsoft Entra, GitLab, Authelia) and a one-click importable **Keycloak client JSON** export |
 | Administration | user list/show/create/delete, promote/demote, password reset, revoke PATs and credentials, authentication logs, app settings CRUD, system infos, release radar, cache/optimize stubs |
-| Icons | upload, delete, serve from `/storage/icons/*`, default-icon fetch, icon packs listing |
+| Icons | upload, delete, serve from `/storage/icons/*`, default-icon fetch through a configurable **provider chain** (selfh.st, Homarr, walkxcode, Simple Icons, LobeHub, Iconify → `ICON_PROVIDERS`/`ICON_PROVIDER_MAX_TRIES`, or `GET|PUT /api/v1/icons/providers`), icon packs listing |
 | Storage | SQLite (pure Go `modernc.org/sqlite`, default), MySQL and PostgreSQL through the same schema |
 
 ### Front-ends

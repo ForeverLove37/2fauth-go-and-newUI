@@ -114,12 +114,51 @@ returned by any endpoint.
 
 | Route | Status | Notes |
 | --- | --- | --- |
-| `GET /api/v1/icons/packs` | ✅ | static pack list |
-| `POST /api/v1/icons/default` | 🟡 | downloads from the selfh.st icon set; a miss returns 404 instead of Laravel's exception payload |
+| `GET /api/v1/icons/packs` | ✅ | static pack list: every provider with its `id`, `label`, `url` (home page) and `template` (URL template); `name` is kept for the legacy front-ends |
+| `POST /api/v1/icons/default` | 🟡 | resolves the service name through the ordered **provider chain** (see “Icon providers” below) and returns `{"icon", "url", "provider"}`; a total miss answers `404 {"message": "Icon not found for this service"}` instead of Laravel's exception payload |
 | `POST /api/v1/icons` | ✅ | multipart upload, file stored in `storage/icons` |
 | `DELETE /api/v1/icons/{icon}` | ✅ | |
 | `GET /storage/icons/{file}` | ✅ | served with a long cache header |
 | `GET /api/v1/features`, `/features/{feature}` | ✅ | `enabled`/`disabled` per setting |
+
+## Icon providers (additions, outside the PHP contract)
+
+`POST /api/v1/icons/default` no longer hard-codes a single icon set: it walks an
+ordered, admin-editable provider chain and stores the first image that passes the
+content sniffing (`http.DetectContentType` **plus** an `<svg…></svg>` structural
+check, because Go reports SVG as `text/xml`/`text/plain`). A provider misses on a
+transport error, a non-200 status, an empty body or a body that is neither an SVG
+nor a PNG/JPEG/WebP/GIF image. Each attempt is limited to 6 s, the whole chain to
+15 s, and a partially downloaded file is never written.
+
+`iconProviders` (comma separated ids, default `selfhst,dashboard,walkx,simpleicons,lobehub,iconify`)
+and `iconProviderMaxTries` (1-6, default `3`, only the first N *enabled*
+providers are attempted) are ordinary settings, seeded by `ICON_PROVIDERS` /
+`ICON_PROVIDER_MAX_TRIES`; a value stored through the API or the settings
+endpoints wins over the environment. The chain is also readable/writable through
+the dedicated endpoints:
+
+| Route | Status | Notes |
+| --- | --- | --- |
+| `GET /api/v1/icons/providers` | ➕ | authenticated: `{"providers": [{id,label,source,template,enabled,order,status}], "max_tries": 3, "all": [{id,label,source,template}]}`. `status` is `available` (enabled and within `max_tries`), `skipped` (enabled but beyond `max_tries`) or `disabled`; `order` is the 1-based position in the configured chain (0 when disabled), the array is returned enabled-first in chain order. No network call is made. |
+| `PUT /api/v1/icons/providers` | ➕ | admin: body `{"providers": ["selfhst","iconify"], "max_tries": 2}` (a comma separated string is accepted too, and `max_tries` is optional — omitting it keeps the current value); ids are validated against the known set, length 1-6, `max_tries` 1-6, otherwise `422 {"message","errors"}`. Answers the same payload as `GET`. |
+
+The providers, in their default order:
+
+| id | label | URL template |
+| --- | --- | --- |
+| `selfhst` | selfh.st | `https://cdn.jsdelivr.net/gh/selfhst/icons/svg/{slug}.svg` |
+| `dashboard` | Homarr dashboard-icons | `https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{slug}.svg` |
+| `walkx` | walkxcode legacy | `https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/svg/{slug}.svg` |
+| `simpleicons` | Simple Icons | `https://cdn.simpleicons.org/{slug}` (alphanumerics only) |
+| `lobehub` | LobeHub icons | `https://cdn.jsdelivr.net/gh/lobehub/lobe-icons/packages/static-png/{slug}.png` (`-color` retry) |
+| `iconify` | Iconify search | `https://api.iconify.design/search?query={service}&limit=1` → `https://api.iconify.design/{prefix}/{name}.svg` |
+
+`{slug}` is the lower-cased service name with spaces/underscores turned into
+dashes and everything outside `[a-z0-9.-]` removed (`Grafana Cloud` →
+`grafana-cloud`, `Proxmox VE` → `proxmox-ve`); names that yield no slug, or that
+carry markup characters, answer the usual “not found”. `dashboard` additionally
+retries the original casing variant.
 
 ## Administration
 
@@ -152,6 +191,10 @@ returned by any endpoint.
   native timestamp columns on MySQL/PostgreSQL.
 * **Throttling** is in-process (sliding window), not shared between instances.
 * **OTP values** are computed locally; no external service is involved.
+* **Icons** are fetched from a configurable provider chain (see “Icon providers”);
+  the HTTP client honours `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`, certificate
+  verification stays enabled and only a fully received, sniffed image is written to
+  `storage/icons`.
 * **SSO (OpenID Connect)** links external accounts through the `oauth_identities`
   table (`UNIQUE(provider, subject)`); the same identity always resolves to the
   same user, an existing account is matched by e-mail (case insensitive) and

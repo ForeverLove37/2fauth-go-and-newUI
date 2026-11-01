@@ -123,6 +123,8 @@ func (s *Server) registerRoutes() {
 
 	// icons
 	s.addAuth(http.MethodGet, "api/v1/icons/packs", s.iconPacks)
+	s.addAuth(http.MethodGet, "api/v1/icons/providers", s.iconProviders)
+	s.addAdmin(http.MethodPut, "api/v1/icons/providers", s.updateIconProviders)
 	s.addAuth(http.MethodPost, "api/v1/icons/default", s.iconFetch)
 	s.addAuth(http.MethodPost, "api/v1/icons", s.iconUpload)
 	s.addAuth(http.MethodDelete, "api/v1/icons/{icon}", s.iconDelete)

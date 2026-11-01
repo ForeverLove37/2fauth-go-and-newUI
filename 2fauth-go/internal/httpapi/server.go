@@ -55,7 +55,7 @@ func New(opts Options) (*Server, error) {
 		st:          opts.Store,
 		settings:    opts.Settings,
 		enc:         opts.Enc,
-		icons:       services.NewIconService(opts.Config, opts.Store),
+		icons:       services.NewIconService(opts.Config, opts.Store, opts.Settings),
 		spa:         spa,
 		ui:          loadUI(opts.Config.UIPath),
 		forceHTTPS:  opts.HTTPS,

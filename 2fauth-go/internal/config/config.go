@@ -83,6 +83,12 @@ type Config struct {
 	OpenIDAutoRedirect bool
 	GithubClientSecret string
 
+	// Icon provider chain defaults (ICON_PROVIDERS / ICON_PROVIDER_MAX_TRIES).
+	// They seed the iconProviders / iconProviderMaxTries settings, which an
+	// administrator can override: the stored value always wins over this file.
+	IconProviders        string
+	IconProviderMaxTries int
+
 	// Preferences defaults (USERPREF_DEFAULT__*)
 	DefaultPreferences map[string]any
 	// LockedPreferences (USERPREF_LOCKED__*)
@@ -119,6 +125,21 @@ var Locales = []string{
 const (
 	DefaultOpenIDScopes = "openid profile email"
 	DefaultOpenIDLabel  = "Sign in with SSO"
+)
+
+// Defaults of the icon provider chain. The order of DefaultIconProviders is the
+// order of the provider table: the most specific sets come first and the search
+// based Iconify is the last resort.
+const (
+	DefaultIconProviders        = "selfhst,dashboard,walkx,simpleicons,lobehub,iconify"
+	DefaultIconProviderMaxTries = 3
+)
+
+// Setting names of the icon provider chain (admin editable, they win over the
+// ICON_PROVIDERS / ICON_PROVIDER_MAX_TRIES environment defaults).
+const (
+	SettingIconProviders        = "iconProviders"
+	SettingIconProviderMaxTries = "iconProviderMaxTries"
 )
 
 type prefDefault struct {
@@ -318,6 +339,19 @@ func Load(basePath string) *Config {
 	for k, v := range defaultSettings {
 		c.Settings[k] = v
 	}
+
+	c.IconProviders = strings.TrimSpace(nullToEmpty(get("ICON_PROVIDERS", DefaultIconProviders)))
+	if c.IconProviders == "" {
+		c.IconProviders = DefaultIconProviders
+	}
+	c.IconProviderMaxTries = envInt(get("ICON_PROVIDER_MAX_TRIES", strconv.Itoa(DefaultIconProviderMaxTries)), DefaultIconProviderMaxTries)
+	if c.IconProviderMaxTries < 1 {
+		c.IconProviderMaxTries = DefaultIconProviderMaxTries
+	}
+	// Environment first, database options afterwards: an administrator always
+	// overrides this file through the settings service.
+	c.Settings[SettingIconProviders] = c.IconProviders
+	c.Settings[SettingIconProviderMaxTries] = c.IconProviderMaxTries
 
 	c.DefaultPreferences = map[string]any{}
 	for _, p := range preferenceDefaults {

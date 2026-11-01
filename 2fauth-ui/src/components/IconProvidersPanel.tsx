@@ -9,6 +9,15 @@ import Icon from './Icon'
  * order. The first library that has the icon wins; the next ones are used as
  * fallbacks, up to "libraries to try".
  */
+/** enabled libraries in chain order first, then the disabled ones */
+function sortChain(providers: IconProvider[]): IconProvider[] {
+  return [...providers].sort((a, b) => {
+    if (a.enabled !== b.enabled) return a.enabled ? -1 : 1
+    if (a.enabled) return a.order - b.order
+    return 0
+  })
+}
+
 export default function IconProvidersPanel() {
   const t = useT()
   const toast = useStore((state) => state.toast)
@@ -20,7 +29,7 @@ export default function IconProvidersPanel() {
     void (async () => {
       try {
         const loaded = await api.iconProviders()
-        setProviders([...loaded.providers].sort((a, b) => a.order - b.order))
+        setProviders(sortChain(loaded.providers))
         setMaxTries(loaded.max_tries)
       } catch (error) {
         toast('error', (error as Error).message)
@@ -54,7 +63,7 @@ export default function IconProvidersPanel() {
         providers: enabled,
         max_tries: Math.min(maxTries, enabled.length),
       })
-      setProviders([...saved.providers].sort((a, b) => a.order - b.order))
+      setProviders(sortChain(saved.providers))
       setMaxTries(saved.max_tries)
       toast('success', t('Icon libraries updated'))
     } catch (error) {
