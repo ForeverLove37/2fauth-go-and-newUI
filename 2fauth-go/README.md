@@ -41,11 +41,13 @@ Implemented and verified end to end against the shipped SPA:
 | --- | --- |
 | Accounts | create / read / update / delete, batch delete, withdraw from group, reorder, favourites, transfer of ownership, count, preview from `otpauth://` URI, QR code rendering, export (2FAuth JSON and `otpauth` list) |
 | OTP | TOTP (RFC 6238), HOTP (RFC 4226, counter persisted), Steam TOTP; sha1/sha256/sha512/md5; 5-10 digits; custom period/counter; `otp` object embedded in list/show responses with `withOtp` |
-| Import | 2FAuth JSON (schema 1), Aegis JSON, 2FAS JSON, Google Authenticator `otpauth-migration://` (protobuf decoded in-house), plain `otpauth://` lists, `issuer:account:secret` lists, duplicate detection |
+| Import | 2FAuth, Aegis and 2FAS JSON (plain or encrypted), Google Authenticator `otpauth-migration://` (protobuf decoded in-house), Bitwarden, andOTP, FreeOTP+, Authenticator Pro, Raivo, LastPass and Proton Authenticator JSON, CSV with a header, `otpauth://` lists, `issuer:account:secret` lists, duplicate detection (see [docs/IMPORT.md](docs/IMPORT.md)) |
+| Export | 2FAuth JSON, `otpauth` list, encrypted file (argon2id + AES-256-GCM, format documented in [docs/IMPORT.md](docs/IMPORT.md)); owners only |
+| E-mail | SMTP (STARTTLS, implicit TLS, PLAIN and LOGIN) configured by `MAIL_*` or from the panel: password reset, address confirmation, new sign-in, failed sign-in, password changed, shared and transferred accounts, test message, in zh-CN and en (see [internal/mail/README.md](internal/mail/README.md)) |
 | Groups | CRUD, ordering, `show_in_chips`, assign accounts, per-group listing |
 | Sharing | per-user shares, `is_borrowed`/`borrowed_by`, share with all users scope, recipients listing, borrowed OTP generation, OTP generation logs |
 | Users & auth | register (first user is admin), login, logout, profile update, password change, session cookie + `XSRF-TOKEN`/`X-XSRF-TOKEN` (419 on mismatch), 418 on idle, login throttling (429), personal access tokens (`Authorization: Bearer`, stored hashed) |
-| SSO | generic **OpenID Connect** login (authorization code + PKCE + nonce, `state` in an encrypted cookie), discovery from `.well-known/openid-configuration`, account resolution by identity → e-mail → optional auto-registration, admin API, provider presets (Keycloak, Authentik, Auth0, Okta, Google, Microsoft Entra, GitLab, Authelia) and a one-click importable **Keycloak client JSON** export |
+| SSO | generic **OpenID Connect** login (authorization code + PKCE + nonce, `state` in an encrypted cookie), discovery from `.well-known/openid-configuration`, ID token verification (signature through JWKS, `iss`, `aud`, `exp`, `nonce`), account resolution by identity → verified e-mail → optional auto-registration, admin API, provider presets (Keycloak, Authentik, Auth0, Okta, Google, Microsoft Entra, GitLab, Authelia) and a one-click importable **Keycloak client JSON** export |
 | Administration | user list/show/create/delete, promote/demote, password reset, revoke PATs and credentials, authentication logs, app settings CRUD, system infos, release radar, cache/optimize stubs |
 | Icons | upload, delete, serve from `/storage/icons/*`, default-icon fetch through a configurable **provider chain** (selfh.st, Homarr, walkxcode, Simple Icons, LobeHub, Iconify → `ICON_PROVIDERS`/`ICON_PROVIDER_MAX_TRIES`, or `GET|PUT /api/v1/icons/providers`), icon packs listing |
 | Storage | SQLite (pure Go `modernc.org/sqlite`, default), MySQL and PostgreSQL through the same schema |
@@ -78,8 +80,12 @@ OIDC_BUTTON_LABEL="Sign in with SSO"
 Flow: `GET /socialite/redirect/openid` stores `state`, `nonce` and the PKCE
 verifier in an encrypted `oidc_tx` cookie and redirects to the provider;
 `GET /socialite/callback/openid` validates the state, exchanges the code
-(`client_secret_post`, HTTP Basic fallback), reads the userinfo, resolves the
-account and creates the session (`418`/`419` semantics unchanged). Failures land
+(`client_secret_post`, HTTP Basic fallback), verifies the ID token, reads the userinfo
+(same subject required), resolves the account and creates the session (`418`/`419`
+semantics unchanged). An address is only trusted with `email_verified=true`; for a
+provider that never sends this claim, `OIDC_TRUST_UNVERIFIED_EMAIL=true` is an explicit
+choice. Linking a local account whose address was never confirmed disables its password,
+sessions and tokens, so that nobody can register an address first and wait. Failures land
 on `/login?sso_error=<code>` and the panel explains each code.
 
 To try the flow without a real provider, run the bundled fake IdP
@@ -109,16 +115,13 @@ performing work:
   registration and assertion are stubs.
 * **GitHub OAuth** — `/socialite/*/github`. OpenID Connect works (see below), the
   GitHub driver still answers `501`.
-* **E-mail** — password reset mails and the admin "test e-mail" button do not send
-  anything; `/user/password/lost` and `/user/password/reset` answer success
-  without side effects.
 
 See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the endpoint-by-endpoint
 status.
 
 ## Build
 
-Requires Go 1.26+.
+Requires Go 1.26.10+.
 
 ```bash
 cd 2fauth-go
@@ -198,9 +201,10 @@ encryption format matches Laravel's `APP_KEY`/`encryptString` payload. Two paths
 * **Fresh start (recommended)** — run the Go server, then import your PHP-2FAuth
   JSON export (`Import ▸ 2FAuth (JSON)`). Accounts, groups and secrets are re-created.
 * **Reuse the existing SQLite file** — point `DB_DATABASE` at the copy of
-  `database/database.sqlite` produced by the PHP install. Keep the same `APP_KEY`,
-  and note that PHP-encrypted `secret` columns stay readable because the crypto
-  format is identical. Tables added by this implementation are created on start-up.
+  `database/database.sqlite` produced by the PHP install. Keep the same `APP_KEY`:
+  PHP-encrypted `secret` columns stay readable because the crypto format is identical,
+  and secrets stored in clear text are encrypted at the first start. Tables added by
+  this implementation are created on start-up.
 
 ## Development
 
@@ -208,6 +212,11 @@ encryption format matches Laravel's `APP_KEY`/`encryptString` payload. Two paths
 go test ./...   # crypto/OTP vectors + HTTP integration tests (temp SQLite database)
 go vet ./...
 gofmt -l .
+
+# the same storage tests against real servers (the tables are dropped and recreated)
+TEST_PGSQL_DSN='postgres://user:pw@127.0.0.1:5432/test?sslmode=disable' \
+TEST_MYSQL_DSN='user:pw@tcp(127.0.0.1:3306)/test?parseTime=true&charset=utf8mb4&loc=UTC' \
+go test ./internal/store/
 ```
 
 The test suite covers Laravel-compatible decryption of a reference ciphertext, the
@@ -225,6 +234,8 @@ internal/db           connection, dialect handling, schema, additive migrations
 internal/store        data access (users, accounts, groups, shares, tokens, logs)
 internal/services     settings service (boolean/typed serialisation), icon store
 internal/otp          TOTP/HOTP/Steam generators, base32, otpauth URI parser/builder
+internal/mail         SMTP delivery and the e-mail templates
+internal/oidc         discovery, code exchange and ID token verification
 internal/httpapi      router, session/CSRF, validators, JSON resources, handlers
 internal/httpapi/ui.go  React panel serving (/ui, /assets, /legacy dispatch, frontend-config)
 ```

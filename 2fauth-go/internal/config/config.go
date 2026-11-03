@@ -52,6 +52,21 @@ type Config struct {
 	AuthProxyHeaderForMail string
 	ProxyLogoutURL         string
 	TrustedProxies         string
+	// AllowedClientIPs restricts the addresses allowed to connect at all ("" = any).
+	AllowedClientIPs string
+	// SessionMaxAge is the absolute lifetime of a session, in minutes.
+	SessionMaxAge int
+
+	// ListenAddr is the address to bind, from LISTEN_ADDR, SERVER_PORT or PORT.
+	ListenAddr string
+
+	// Native TLS. Both files must be set to serve HTTPS without a reverse proxy.
+	TLSCertFile string
+	TLSKeyFile  string
+
+	// DBSSLMode is the PostgreSQL sslmode, DBTLS the MySQL tls parameter.
+	DBSSLMode string
+	DBTLS     string
 
 	// Webauthn
 	WebAuthnName           string
@@ -67,6 +82,10 @@ type Config struct {
 	MailEncryption string
 	MailFromName   string
 	MailFromAddr   string
+	// MailVerifyTLS checks the certificate of the SMTP server.
+	MailVerifyTLS bool
+	// MailLocale is the language of the e-mails of users who did not choose one.
+	MailLocale string
 
 	// SSO (OpenID Connect)
 	//
@@ -81,7 +100,10 @@ type Config struct {
 	OpenIDButtonLabel  string
 	OpenIDAutoRegister bool
 	OpenIDAutoRedirect bool
-	GithubClientSecret string
+	// OpenIDTrustUnverifiedEmail accepts an e-mail without email_verified=true, for
+	// providers that never send this claim. It is off by default on purpose.
+	OpenIDTrustUnverifiedEmail bool
+	GithubClientSecret         string
 
 	// Icon provider chain defaults (ICON_PROVIDERS / ICON_PROVIDER_MAX_TRIES).
 	// They seed the iconProviders / iconProviderMaxTries settings, which an
@@ -205,7 +227,7 @@ var nonLockablePreferences = map[string]bool{
 
 // defaultSettings mirrors config('2fauth.settings').
 var defaultSettings = map[string]any{
-	"useEncryption":              false,
+	"useEncryption":              true,
 	"checkForUpdate":             true,
 	"lastRadarScan":              0,
 	"latestRelease":              false,
@@ -278,27 +300,43 @@ func Load(basePath string) *Config {
 	c.ContentSecurityPolicy = envBool(get("CONTENT_SECURITY_POLICY", "true"))
 	c.BlockOtpauthImagelinkFetching = envBool(get("BLOCK_OPTAUTH_IMAGELINK_FETCHING", "true"))
 
-	c.DBConnection = strings.TrimSpace(get("DB_CONNECTION", "mysql"))
+	c.DBConnection = strings.TrimSpace(get("DB_CONNECTION", "sqlite"))
 	c.DBDatabase = get("DB_DATABASE", "")
 	c.DBHost = get("DB_HOST", "")
 	c.DBPort = get("DB_PORT", "")
 	c.DBUsername = get("DB_USERNAME", "")
 	c.DBPassword = get("DB_PASSWORD", "")
+	c.DBSSLMode = get("DB_SSLMODE", "prefer")
+	c.DBTLS = get("DB_TLS", "preferred")
 
 	c.SessionDriver = get("SESSION_DRIVER", "file")
-	c.SessionLifetime = envInt(get("SESSION_LIFETIME", strconv.Itoa(60*24*90)), 60*24*90)
+	c.SessionLifetime = envInt(get("SESSION_LIFETIME", "120"), 120)
+	c.SessionMaxAge = envInt(get("SESSION_MAX_AGE", strconv.Itoa(60*24*30)), 60*24*30)
 	c.SessionSecure = envBool(get("SESSION_SECURE_COOKIE", "false"))
 
 	c.AuthenticationGuard = get("AUTHENTICATION_GUARD", "web-guard")
 	c.LoginThrottle = envInt(get("LOGIN_THROTTLE", "5"), 5)
-	c.ThrottleAPI = envInt(get("THROTTLE_API", "60"), 60)
-	c.ThrottleAPIImport = envInt(get("THROTTLE_API_DURING_IMPORT", "1000"), 1000)
+	c.ThrottleAPI = envInt(get("THROTTLE_API", "300"), 300)
+	c.ThrottleAPIImport = envInt(get("THROTTLE_API_DURING_IMPORT", "30"), 30)
 	c.AuthLogRetentionTime = envInt(get("AUTHENTICATION_LOG_RETENTION", "365"), 365)
 	c.OtpLogRetentionTime = envInt(get("OTP_LOG_RETENTION", "365"), 365)
 	c.AuthProxyHeaderForUser = nullToEmpty(get("AUTH_PROXY_HEADER_FOR_USER", ""))
 	c.AuthProxyHeaderForMail = nullToEmpty(get("AUTH_PROXY_HEADER_FOR_EMAIL", ""))
 	c.ProxyLogoutURL = nullToEmpty(get("PROXY_LOGOUT_URL", ""))
 	c.TrustedProxies = nullToEmpty(get("TRUSTED_PROXIES", ""))
+	c.AllowedClientIPs = nullToEmpty(get("ALLOWED_CLIENT_IPS", ""))
+	c.ListenAddr = ":8000"
+	for _, key := range []string{"LISTEN_ADDR", "SERVER_PORT", "PORT"} {
+		if v := strings.TrimSpace(get(key, "")); v != "" {
+			if !strings.Contains(v, ":") {
+				v = ":" + v
+			}
+			c.ListenAddr = v
+			break
+		}
+	}
+	c.TLSCertFile = nullToEmpty(get("TLS_CERT_FILE", ""))
+	c.TLSKeyFile = nullToEmpty(get("TLS_KEY_FILE", ""))
 
 	c.WebAuthnName = get("WEBAUTHN_NAME", "2FAuth")
 	c.WebAuthnID = nullToEmpty(get("WEBAUTHN_ID", ""))
@@ -312,6 +350,8 @@ func Load(basePath string) *Config {
 	c.MailEncryption = nullToEmpty(get("MAIL_ENCRYPTION", ""))
 	c.MailFromName = nullToEmpty(get("MAIL_FROM_NAME", ""))
 	c.MailFromAddr = nullToEmpty(get("MAIL_FROM_ADDRESS", ""))
+	c.MailVerifyTLS = envBool(get("MAIL_VERIFY_TLS", "true"))
+	c.MailLocale = get("MAIL_LOCALE", "zh-CN")
 
 	c.OpenIDEnabled = envBool(get("OIDC_ENABLED", "false"))
 	c.OpenIDIssuer = strings.TrimRight(strings.TrimSpace(nullToEmpty(get("OIDC_ISSUER", ""))), "/")
@@ -332,6 +372,7 @@ func Load(basePath string) *Config {
 	}
 	c.OpenIDAutoRegister = envBool(get("OIDC_AUTO_REGISTER", "true"))
 	c.OpenIDAutoRedirect = envBool(get("OIDC_AUTO_REDIRECT", "false"))
+	c.OpenIDTrustUnverifiedEmail = envBool(get("OIDC_TRUST_UNVERIFIED_EMAIL", "false"))
 	c.GithubClientSecret = get("GITHUB_CLIENT_SECRET", "")
 
 	c.Locales = Locales
@@ -380,6 +421,9 @@ func Load(basePath string) *Config {
 
 	c.AssetsPath = get("ASSETS_PATH", filepath.Join(basePath, "public"))
 	c.UIPath = get("UI_ASSETS_PATH", filepath.Join(basePath, "ui"))
+	if abs, err := filepath.Abs(c.UIPath); err == nil {
+		c.UIPath = abs
+	}
 
 	if c.DBConnection == "sqlite" && c.DBDatabase == "" {
 		c.DatabasePath = filepath.Join(basePath, "database", "database.sqlite")

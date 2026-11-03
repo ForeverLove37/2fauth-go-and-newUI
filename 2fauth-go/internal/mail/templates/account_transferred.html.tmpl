@@ -1,0 +1,14 @@
+{{define "body"}}<tr>
+  <td class="email-pad" style="padding:38px 44px 38px;">
+    <h1 class="email-title" style="margin:0 0 14px;color:#101727;font-size:30px;line-height:40px;font-weight:700;word-break:break-word;">{{if .ZH}}{{.V.OwnerName}} 把 {{.V.Label}} 转移给了你{{else}}{{.V.OwnerName}} transferred {{.V.Label}} to you{{end}}</h1>
+    <p style="margin:0 0 22px;color:#101727;font-size:17px;line-height:30px;">{{if .ZH}}你现在是这个账户的所有者，可以查看密钥、修改和删除它。{{else}}You now own this account: you can see its secret, edit it and delete it.{{end}}</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f3f5f9" style="background:#f3f5f9;border-radius:10px;margin:0 0 22px;"><tr>
+      <td style="padding:18px 22px;word-break:break-word;">
+        <div style="color:#101727;font-size:20px;line-height:30px;font-weight:700;">{{.V.Label}}</div>
+        {{if .V.Account}}<div style="color:#101727;font-size:16px;line-height:26px;">{{.V.Account}}</div>{{end}}
+      </td>
+    </tr></table>
+    <p style="margin:0 0 26px;color:#101727;font-size:16px;line-height:28px;">{{if .ZH}}之前的所有者已失去访问权限，原有的共享也已取消。{{else}}The previous owner no longer has access, and its previous shares were removed.{{end}}</p>
+    {{if .ZH}}{{template "button" (btn .V.AppURL "打开账户列表")}}{{else}}{{template "button" (btn .V.AppURL "Open my accounts")}}{{end}}
+  </td>
+</tr>{{end}}

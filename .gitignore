@@ -7,6 +7,7 @@
 **/node_modules/
 2fauth-ui/dist/
 2fauth-ui/node_modules/.cache/
+*.tsbuildinfo
 
 # Local upstream/reference checkouts (not part of this repository)
 2FAuth/
@@ -18,6 +19,10 @@ ui-manager.zip
 .env
 .env.local
 .env.*.local
+
+# TLS keys and certificates
+*.pem
+*.key
 
 # Runtime state: databases, uploaded icons, logs, and local deployment dirs
 run/

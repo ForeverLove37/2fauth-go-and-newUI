@@ -8,9 +8,14 @@ import (
 // throttleStore is a small in-memory sliding window rate limiter keyed by an
 // arbitrary string (IP, IP+email, ...).
 type throttleStore struct {
-	mu   sync.Mutex
-	hits map[string][]time.Time
+	mu        sync.Mutex
+	hits      map[string][]time.Time
+	lastSweep time.Time
 }
+
+// sweepInterval is how often idle keys are dropped, so the map stays proportional
+// to the current traffic rather than to every key ever seen.
+const sweepInterval = time.Minute
 
 func newThrottleStore() *throttleStore {
 	return &throttleStore{hits: map[string][]time.Time{}}
@@ -22,6 +27,14 @@ func (t *throttleStore) Allow(key string, max int, window time.Duration) (bool, 
 	defer t.mu.Unlock()
 	now := time.Now()
 	cutoff := now.Add(-window)
+	if now.Sub(t.lastSweep) > sweepInterval {
+		t.lastSweep = now
+		for k, stamps := range t.hits {
+			if len(stamps) == 0 || stamps[len(stamps)-1].Before(cutoff) {
+				delete(t.hits, k)
+			}
+		}
+	}
 	list := t.hits[key][:0]
 	for _, ts := range t.hits[key] {
 		if ts.After(cutoff) {

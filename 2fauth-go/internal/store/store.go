@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"2fauth/internal/config"
@@ -20,6 +21,10 @@ var ErrNotFound = errors.New("not found")
 type Store struct {
 	DB  *db.DB
 	Cfg *config.Config
+
+	cipher SecretCipher
+	// createUserMu makes "first registered user becomes administrator" atomic.
+	createUserMu sync.Mutex
 }
 
 // New builds a Store.
@@ -155,29 +160,53 @@ func (s *Store) CountAdmins() (int64, error) {
 
 // CreateUser inserts a user. The first registered user becomes an administrator.
 func (s *Store) CreateUser(name, email, passwordHash string) (*User, error) {
+	s.createUserMu.Lock()
+	defer s.createUserMu.Unlock()
 	now := db.NowValue(s.DB.Dialect)
 	count, err := s.CountUsers()
 	if err != nil {
 		return nil, err
 	}
 	isAdmin := count == 0
-	res, err := s.DB.Exec(`INSERT INTO users (name, email, password, created_at, updated_at, is_admin, preferences)
+	id, err := s.DB.InsertID(`INSERT INTO users (name, email, password, created_at, updated_at, is_admin, preferences)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		name, strings.ToLower(email), passwordHash, now, now, isAdmin, "{}")
-	if err != nil {
-		return nil, err
-	}
-	id, err := res.LastInsertId()
 	if err != nil {
 		return nil, err
 	}
 	return s.GetUser(id)
 }
 
-// UpdateUsernameEmail persists a name/email change.
-func (s *Store) UpdateUsernameEmail(id int64, name, email string) error {
-	_, err := s.DB.Exec(`UPDATE users SET name = ?, email = ?, updated_at = ? WHERE id = ?`,
-		name, strings.ToLower(email), db.NowValue(s.DB.Dialect), id)
+// UpdateUsernameEmail persists a name/email change. A new address has not been
+// proven yet, so it loses the verified mark. It reports whether the e-mail changed.
+func (s *Store) UpdateUsernameEmail(id int64, name, email string) (bool, error) {
+	current, err := s.GetUser(id)
+	if err != nil {
+		return false, err
+	}
+	email = strings.ToLower(email)
+	changed := !strings.EqualFold(current.Email, email)
+	if changed {
+		_, err = s.DB.Exec(`UPDATE users SET name = ?, email = ?, email_verified_at = NULL, updated_at = ? WHERE id = ?`,
+			name, email, db.NowValue(s.DB.Dialect), id)
+		return true, err
+	}
+	_, err = s.DB.Exec(`UPDATE users SET name = ?, email = ?, updated_at = ? WHERE id = ?`,
+		name, email, db.NowValue(s.DB.Dialect), id)
+	return false, err
+}
+
+// MarkEmailVerified records that the user proved control of the address.
+func (s *Store) MarkEmailVerified(id int64) error {
+	now := db.NowValue(s.DB.Dialect)
+	_, err := s.DB.Exec(`UPDATE users SET email_verified_at = ?, updated_at = ? WHERE id = ?`, now, now, id)
+	return err
+}
+
+// SetOAuthProvider flags the account as managed by an external provider.
+func (s *Store) SetOAuthProvider(id int64, provider, subject string) error {
+	_, err := s.DB.Exec(`UPDATE users SET oauth_provider = ?, oauth_id = ?, updated_at = ? WHERE id = ?`,
+		provider, subject, db.NowValue(s.DB.Dialect), id)
 	return err
 }
 
@@ -218,6 +247,18 @@ func (s *Store) DeleteUser(id int64) error {
 	if err := s.DeleteOAuthIdentitiesByUser(id); err != nil {
 		return err
 	}
+	if err := s.DeleteUserSessions(id, ""); err != nil {
+		return err
+	}
+	if err := s.RevokeAllTokens(id); err != nil {
+		return err
+	}
+	if err := s.DeleteWebAuthnCredentials(id); err != nil {
+		return err
+	}
+	if _, err := s.DB.Exec(`DELETE FROM icon_uploads WHERE user_id = ?`, id); err != nil {
+		return err
+	}
 	_, err := s.DB.Exec(`DELETE FROM users WHERE id = ?`, id)
 	return err
 }
@@ -254,7 +295,7 @@ func (s *Store) FindUsersByIDs(ids []int64) ([]*User, error) {
 
 // AllOptions returns the raw option rows.
 func (s *Store) AllOptions() (map[string]string, error) {
-	rows, err := s.DB.Query(`SELECT key, value FROM options`)
+	rows, err := s.DB.Query(`SELECT "key", value FROM options`)
 	if err != nil {
 		return nil, err
 	}
@@ -272,30 +313,30 @@ func (s *Store) AllOptions() (map[string]string, error) {
 
 // SetOption upserts an option.
 func (s *Store) SetOption(key, value string) error {
-	if _, err := s.DB.Exec(`UPDATE options SET value = ? WHERE key = ?`, value, key); err == nil {
+	if _, err := s.DB.Exec(`UPDATE options SET value = ? WHERE "key" = ?`, value, key); err == nil {
 		var n int64
-		if err := s.DB.QueryRow(`SELECT COUNT(*) FROM options WHERE key = ?`, key).Scan(&n); err == nil && n > 0 {
+		if err := s.DB.QueryRow(`SELECT COUNT(*) FROM options WHERE "key" = ?`, key).Scan(&n); err == nil && n > 0 {
 			return nil
 		}
 	}
-	_, err := s.DB.Exec(`INSERT INTO options (key, value) VALUES (?, ?)`, key, value)
+	_, err := s.DB.Exec(`INSERT INTO options ("key", value) VALUES (?, ?)`, key, value)
 	if err != nil {
 		// fall back to update for drivers returning an error on duplicate keys
-		_, err = s.DB.Exec(`UPDATE options SET value = ? WHERE key = ?`, value, key)
+		_, err = s.DB.Exec(`UPDATE options SET value = ? WHERE "key" = ?`, value, key)
 	}
 	return err
 }
 
 // DeleteOption removes an option.
 func (s *Store) DeleteOption(key string) error {
-	_, err := s.DB.Exec(`DELETE FROM options WHERE key = ?`, key)
+	_, err := s.DB.Exec(`DELETE FROM options WHERE "key" = ?`, key)
 	return err
 }
 
 // OptionExists reports whether an option row exists.
 func (s *Store) OptionExists(key string) bool {
 	var n int64
-	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM options WHERE key = ?`, key).Scan(&n); err != nil {
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM options WHERE "key" = ?`, key).Scan(&n); err != nil {
 		return false
 	}
 	return n > 0
@@ -358,7 +399,7 @@ func scanGroup(scan func(...any) error) (*Group, error) {
 func (s *Store) ListGroups(userID int64) ([]*Group, error) {
 	rows, err := s.DB.Query(`SELECT g.id, g.user_id, g.name, g.order_column, g.show_in_chips, g.created_at, g.updated_at,
 			(SELECT COUNT(*) FROM twofaccounts t WHERE t.group_id = g.id AND t.user_id = g.user_id)
-		FROM groups g WHERE g.user_id = ? ORDER BY g.order_column ASC, g.id ASC`, userID)
+		FROM "groups" g WHERE g.user_id = ? ORDER BY g.order_column ASC, g.id ASC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +439,7 @@ func (s *Store) ListGroups(userID int64) ([]*Group, error) {
 
 // GetGroup returns one group owned by the user.
 func (s *Store) GetGroup(id, userID int64) (*Group, error) {
-	row := s.DB.QueryRow(`SELECT `+groupColumns+` FROM groups WHERE id = ? AND user_id = ?`, id, userID)
+	row := s.DB.QueryRow(`SELECT `+groupColumns+` FROM "groups" WHERE id = ? AND user_id = ?`, id, userID)
 	g, err := scanGroup(row.Scan)
 	if err != nil {
 		return nil, err
@@ -413,17 +454,13 @@ func (s *Store) GetGroup(id, userID int64) (*Group, error) {
 // CreateGroup inserts a group at the end of the user's ordering.
 func (s *Store) CreateGroup(userID int64, name string, showInChips bool) (*Group, error) {
 	var maxOrder db.NullInt
-	if err := s.DB.QueryRow(`SELECT MAX(order_column) FROM groups WHERE user_id = ?`, userID).Scan(&maxOrder); err != nil {
+	if err := s.DB.QueryRow(`SELECT MAX(order_column) FROM "groups" WHERE user_id = ?`, userID).Scan(&maxOrder); err != nil {
 		return nil, err
 	}
 	next := maxOrder.Int + 1
 	now := db.NowValue(s.DB.Dialect)
-	res, err := s.DB.Exec(`INSERT INTO groups (user_id, name, order_column, show_in_chips, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+	id, err := s.DB.InsertID(`INSERT INTO "groups" (user_id, name, order_column, show_in_chips, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		userID, name, next, showInChips, now, now)
-	if err != nil {
-		return nil, err
-	}
-	id, err := res.LastInsertId()
 	if err != nil {
 		return nil, err
 	}
@@ -433,11 +470,11 @@ func (s *Store) CreateGroup(userID int64, name string, showInChips bool) (*Group
 // UpdateGroup persists a group rename.
 func (s *Store) UpdateGroup(id, userID int64, name string, showInChips *bool) error {
 	if showInChips != nil {
-		_, err := s.DB.Exec(`UPDATE groups SET name = ?, show_in_chips = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+		_, err := s.DB.Exec(`UPDATE "groups" SET name = ?, show_in_chips = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
 			name, *showInChips, db.NowValue(s.DB.Dialect), id, userID)
 		return err
 	}
-	_, err := s.DB.Exec(`UPDATE groups SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+	_, err := s.DB.Exec(`UPDATE "groups" SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
 		name, db.NowValue(s.DB.Dialect), id, userID)
 	return err
 }
@@ -447,14 +484,14 @@ func (s *Store) DeleteGroup(id, userID int64) error {
 	if _, err := s.DB.Exec(`UPDATE twofaccounts SET group_id = NULL WHERE group_id = ? AND user_id = ?`, id, userID); err != nil {
 		return err
 	}
-	_, err := s.DB.Exec(`DELETE FROM groups WHERE id = ? AND user_id = ?`, id, userID)
+	_, err := s.DB.Exec(`DELETE FROM "groups" WHERE id = ? AND user_id = ?`, id, userID)
 	return err
 }
 
 // SaveGroupOrder persists the ordering of a user's groups.
 func (s *Store) SaveGroupOrder(userID int64, orderedIDs []int64) error {
 	for i, id := range orderedIDs {
-		if _, err := s.DB.Exec(`UPDATE groups SET order_column = ? WHERE id = ? AND user_id = ?`, i+1, id, userID); err != nil {
+		if _, err := s.DB.Exec(`UPDATE "groups" SET order_column = ? WHERE id = ? AND user_id = ?`, i+1, id, userID); err != nil {
 			return err
 		}
 	}

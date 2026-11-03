@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -52,6 +54,7 @@ const (
 	settingOpenIDLabel        = "openid.label"
 	settingOpenIDAutoRegister = "openid.auto_register"
 	settingOpenIDAutoRedirect = "openid.auto_redirect"
+	settingOpenIDTrustEmail   = "openid.trust_unverified_email"
 )
 
 // openIDSettings is the effective OpenID Connect configuration.
@@ -64,6 +67,9 @@ type openIDSettings struct {
 	Label        string
 	AutoRegister bool
 	AutoRedirect bool
+	// TrustUnverifiedEmail accepts an address the provider does not claim to have
+	// verified. It is an explicit opt-in for providers that never send the claim.
+	TrustUnverifiedEmail bool
 }
 
 // scopeList splits the scopes setting into the list the IdP expects.
@@ -87,6 +93,11 @@ func (s *Server) ssoSettings() openIDSettings {
 		Label:        s.cfg.OpenIDButtonLabel,
 		AutoRegister: s.cfg.OpenIDAutoRegister,
 		AutoRedirect: s.cfg.OpenIDAutoRedirect,
+
+		TrustUnverifiedEmail: s.cfg.OpenIDTrustUnverifiedEmail,
+	}
+	if v, ok := s.settingBool(settingOpenIDTrustEmail); ok {
+		eff.TrustUnverifiedEmail = v
 	}
 	if v, ok := s.settingBool(settingOpenIDEnabled); ok {
 		eff.Enabled = v
@@ -122,7 +133,7 @@ func (s *Server) ssoSettings() openIDSettings {
 		eff.Label = config.DefaultOpenIDLabel
 	}
 	// Sign-in is only possible with the switch on, an issuer and a client id.
-	eff.Enabled = eff.Enabled && eff.Issuer != "" && eff.ClientID != ""
+	eff.Enabled = eff.Enabled && eff.Issuer != "" && eff.ClientID != "" && s.settings.Bool("enableSso")
 	return eff
 }
 
@@ -271,22 +282,27 @@ func discoveryPayload(p *oidc.Provider) map[string]any {
 func (s *Server) ssoConfig(c *ctx) {
 	eff := s.ssoSettings()
 
+	// Anyone can read this endpoint: the provider details and the reason of a
+	// failure (internal addresses, proxy errors) are for administrators only.
+	admin := c.user != nil && c.user.IsAdmin
 	payload := map[string]any{
 		"enabled":       false,
 		"provider":      openIDProvider,
 		"label":         eff.Label,
 		"auto_redirect": eff.AutoRedirect,
-		"auto_register": eff.AutoRegister,
-		"issuer":        eff.Issuer,
-		"redirect_uri":  s.redirectURI(c),
 		"start_url":     s.ssoStartURL(),
 		"discovery":     nil,
 		"error":         nil,
 	}
+	if admin {
+		payload["auto_register"] = eff.AutoRegister
+		payload["issuer"] = eff.Issuer
+		payload["redirect_uri"] = s.redirectURI(c)
+	}
 	if !eff.Enabled {
 		// Explain an incomplete configuration; a provider that is simply
 		// switched off (or not configured at all) reports no error.
-		if eff.Issuer != "" && eff.ClientID == "" {
+		if admin && eff.Issuer != "" && eff.ClientID == "" {
 			payload["error"] = "The OpenID Connect client id is not configured."
 		}
 		jsonResponse(c.w, http.StatusOK, payload)
@@ -296,12 +312,17 @@ func (s *Server) ssoConfig(c *ctx) {
 	provider, err := oidc.Discover(c.r.Context(), eff.Issuer)
 	if err != nil {
 		slog.Warn("OpenID Connect discovery failed", "issuer", eff.Issuer, "error", err)
-		payload["error"] = err.Error()
+		payload["error"] = "The identity provider cannot be reached."
+		if admin {
+			payload["error"] = err.Error()
+		}
 		jsonResponse(c.w, http.StatusOK, payload)
 		return
 	}
 	payload["enabled"] = true
-	payload["discovery"] = discoveryPayload(provider)
+	if admin {
+		payload["discovery"] = discoveryPayload(provider)
+	}
 	jsonResponse(c.w, http.StatusOK, payload)
 }
 
@@ -396,7 +417,7 @@ func (s *Server) finishOpenIDLogin(c *ctx) {
 	}
 
 	tx, ok := s.loadTransaction(c)
-	if !ok || tx.State == "" || tx.State != c.query("state") {
+	if !ok || tx.State == "" || subtle.ConstantTimeCompare([]byte(tx.State), []byte(c.query("state"))) != 1 {
 		s.ssoFail(c, "state")
 		return
 	}
@@ -426,17 +447,13 @@ func (s *Server) finishOpenIDLogin(c *ctx) {
 		return
 	}
 
-	claims, err := oidc.UserInfo(ctx, provider, tokens.AccessToken)
-	if err != nil {
-		// Fall back to the ID token claims when userinfo is unavailable.
-		if claims, err = oidc.ParseClaims(tokens.IDToken); err != nil {
-			slog.Warn("OpenID Connect userinfo request failed", "error", err)
-			s.ssoFail(c, "userinfo")
-			return
-		}
+	claims, failure := s.verifiedClaims(ctx, provider, eff, tokens, tx.Nonce)
+	if failure != "" {
+		s.ssoFail(c, failure)
+		return
 	}
 
-	user, failure := s.resolveOAuthUser(eff, claims)
+	user, failure := s.resolveOAuthUser(c, eff, claims)
 	if user == nil {
 		slog.Warn("OpenID Connect sign-in refused", "reason", failure, "subject", claimString(claims, "sub"))
 		s.ssoFail(c, failure)
@@ -444,25 +461,71 @@ func (s *Server) finishOpenIDLogin(c *ctx) {
 	}
 
 	// Same session bootstrap as a password login.
-	c.session.UserID = user.ID
-	c.session.regenerate()
+	if err := s.signIn(c, user); err != nil {
+		slog.Error("cannot open a session", "error", err)
+		s.ssoFail(c, "server")
+		return
+	}
 	s.st.TouchLastSeen(user.ID)
-	_ = s.st.CreateAuthLog(user.ID, clientIP(c.r), c.r.UserAgent(), "web-guard", openIDProvider, true)
+	s.notifyNewDevice(c, user, "SSO")
+	_ = s.st.CreateAuthLog(user.ID, s.clientIP(c.r), c.r.UserAgent(), "web-guard", openIDProvider, true)
 
 	s.clearTransaction(c)
 	s.ssoRedirect(c, s.baseURL()+"/")
 }
 
+// verifiedClaims returns the identity of the callback: the claims of a verified ID
+// token, completed by the userinfo endpoint when its subject is the same one.
+func (s *Server) verifiedClaims(ctx context.Context, provider *oidc.Provider, eff openIDSettings, tokens *oidc.TokenSet, nonce string) (map[string]any, string) {
+	if tokens.IDToken == "" {
+		slog.Warn("OpenID Connect provider returned no id_token: is the openid scope requested?")
+		return nil, "token"
+	}
+	claims, err := oidc.VerifyIDToken(ctx, provider, tokens.IDToken, eff.ClientID, eff.ClientSecret, nonce)
+	if err != nil {
+		slog.Warn("OpenID Connect id_token rejected", "error", err)
+		return nil, "token"
+	}
+	if tokens.AccessToken == "" || provider.UserInfoEndpoint == "" {
+		return claims, ""
+	}
+	info, err := oidc.UserInfo(ctx, provider, tokens.AccessToken)
+	if err != nil {
+		// The ID token alone identifies the user; userinfo only adds profile claims.
+		slog.Warn("OpenID Connect userinfo request failed", "error", err)
+		return claims, ""
+	}
+	if claimString(info, "sub") != claimString(claims, "sub") {
+		slog.Warn("OpenID Connect userinfo answered for another subject")
+		return nil, "userinfo"
+	}
+	for name, value := range info {
+		claims[name] = value
+	}
+	return claims, ""
+}
+
+// emailVerifiedClaim reads email_verified, which some providers send as a string.
+func emailVerifiedClaim(claims map[string]any) bool {
+	switch v := claims["email_verified"].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(v, "true")
+	}
+	return false
+}
+
 // resolveOAuthUser maps the provider claims to a local account: known identity,
 // then same e-mail, then auto-registration. It returns a failure code on error.
-func (s *Server) resolveOAuthUser(eff openIDSettings, claims map[string]any) (*store.User, string) {
+//
+// An e-mail only identifies somebody if the provider verified it, otherwise anyone
+// able to choose their address at the provider would become the matching local user.
+func (s *Server) resolveOAuthUser(c *ctx, eff openIDSettings, claims map[string]any) (*store.User, string) {
 	subject := claimString(claims, "sub")
 	email := claimString(claims, "email")
 	if subject == "" {
 		return nil, "userinfo"
-	}
-	if email == "" {
-		return nil, "email"
 	}
 
 	// 1. an identity already linked to a user
@@ -473,11 +536,32 @@ func (s *Server) resolveOAuthUser(eff openIDSettings, claims map[string]any) (*s
 		return nil, "account"
 	}
 
+	if email == "" {
+		return nil, "email"
+	}
+	verified := emailVerifiedClaim(claims)
+	if !verified && !eff.TrustUnverifiedEmail {
+		return nil, "email_unverified"
+	}
+
 	// 2. an existing account using the same (case insensitive) e-mail
 	if user, err := s.st.GetUserByEmail(email); err == nil {
 		if err := s.st.CreateOAuthIdentity(user.ID, openIDProvider, subject, email); err != nil {
 			slog.Warn("cannot link the OpenID Connect identity", "error", err)
 			return nil, "server"
+		}
+		// Local registration does not prove the address. If it was never confirmed,
+		// the password may belong to somebody who registered this address first and
+		// waited: it must not keep working once the real owner has moved in.
+		if user.EmailVerifiedAt == nil {
+			if failure := s.takeOverLocalCredentials(user, subject); failure != "" {
+				return nil, failure
+			}
+			refreshed, err := s.st.GetUser(user.ID)
+			if err != nil {
+				return nil, "server"
+			}
+			user = refreshed
 		}
 		return user, ""
 	} else if !errors.Is(err, store.ErrNotFound) {
@@ -486,8 +570,18 @@ func (s *Server) resolveOAuthUser(eff openIDSettings, claims map[string]any) (*s
 	}
 
 	// 3. auto-registration
-	if !eff.AutoRegister || s.settings.Bool("disableRegistration") {
+	count, err := s.st.CountUsers()
+	if err != nil {
+		return nil, "server"
+	}
+	closed := s.settings.Bool("disableRegistration") && !s.settings.Bool("keepSsoRegistrationEnabled")
+	if count > 0 && (!eff.AutoRegister || closed) {
 		return nil, "register_disabled"
+	}
+	if count > 0 {
+		if _, blocked := s.registrationBlocked(email); blocked {
+			return nil, "register_disabled"
+		}
 	}
 
 	name := claimString(claims, "name")
@@ -513,7 +607,36 @@ func (s *Server) resolveOAuthUser(eff openIDSettings, claims map[string]any) (*s
 		slog.Warn("cannot link the OpenID Connect identity", "error", err)
 		return nil, "server"
 	}
-	return user, ""
+	if err := s.st.SetOAuthProvider(user.ID, openIDProvider, subject); err != nil {
+		slog.Warn("cannot flag the SSO user", "error", err)
+		return nil, "server"
+	}
+	if verified {
+		_ = s.st.MarkEmailVerified(user.ID)
+	}
+	refreshed, err := s.st.GetUser(user.ID)
+	if err != nil {
+		return nil, "server"
+	}
+	return refreshed, ""
+}
+
+// takeOverLocalCredentials ends every way of using an account other than the
+// identity provider: password, sessions and personal access tokens.
+func (s *Server) takeOverLocalCredentials(user *store.User, subject string) string {
+	hash, err := crypt.HashPassword(crypt.RandomString(40))
+	if err != nil {
+		return "server"
+	}
+	if err := s.st.UpdatePassword(user.ID, hash); err != nil {
+		return "server"
+	}
+	s.revokeCredentials(user.ID, "")
+	if err := s.st.SetOAuthProvider(user.ID, openIDProvider, subject); err != nil {
+		return "server"
+	}
+	slog.Warn("local credentials disabled while linking an unverified account to SSO", "user_id", user.ID)
+	return ""
 }
 
 // availableUsername returns name, or a numbered variant when it is taken.
@@ -640,15 +763,16 @@ func (s *Server) clearTransaction(c *ctx) {
 func (s *Server) ssoSettingsPayload(c *ctx) map[string]any {
 	eff := s.ssoSettings()
 	return map[string]any{
-		"enabled":           eff.Enabled,
-		"issuer":            eff.Issuer,
-		"client_id":         eff.ClientID,
-		"client_secret_set": eff.ClientSecret != "",
-		"scopes":            eff.Scopes,
-		"label":             eff.Label,
-		"auto_register":     eff.AutoRegister,
-		"auto_redirect":     eff.AutoRedirect,
-		"redirect_uri":      s.redirectURI(c),
+		"enabled":                eff.Enabled,
+		"issuer":                 eff.Issuer,
+		"client_id":              eff.ClientID,
+		"client_secret_set":      eff.ClientSecret != "",
+		"scopes":                 eff.Scopes,
+		"label":                  eff.Label,
+		"auto_register":          eff.AutoRegister,
+		"auto_redirect":          eff.AutoRedirect,
+		"trust_unverified_email": eff.TrustUnverifiedEmail,
+		"redirect_uri":           s.redirectURI(c),
 	}
 }
 
@@ -720,6 +844,11 @@ func (s *Server) updateSSOSettings(c *ctx) {
 	}
 	if autoRedirect, present := v.boolean("auto_redirect"); present {
 		if !save(settingOpenIDAutoRedirect, autoRedirect) {
+			return
+		}
+	}
+	if trust, present := v.boolean("trust_unverified_email"); present {
+		if !save(settingOpenIDTrustEmail, trust) {
 			return
 		}
 	}
@@ -885,7 +1014,7 @@ func keycloakClientObject(clientID, baseURL, redirectURI, secret string) map[str
 		"alwaysDisplayInConsole":    true,
 		"clientAuthenticatorType":   "client-secret",
 		"secret":                    secret,
-		"redirectUris":              []string{redirectURI, baseURL + "/*"},
+		"redirectUris":              []string{redirectURI},
 		"webOrigins":                []string{baseURL},
 		"standardFlowEnabled":       true,
 		"implicitFlowEnabled":       false,
@@ -899,7 +1028,7 @@ func keycloakClientObject(clientID, baseURL, redirectURI, secret string) map[str
 		"optionalClientScopes":      []string{"address", "phone", "offline_access", "microprofile-jwt"},
 		"attributes": map[string]string{
 			"pkce.code.challenge.method":          "S256",
-			"post.logout.redirect.uris":           baseURL + "/*",
+			"post.logout.redirect.uris":           baseURL + "/login",
 			"access.token.signed.response.alg":    "RS256",
 			"backchannel.logout.session.required": "true",
 		},
@@ -1042,10 +1171,10 @@ func prettyJSON(v any) string {
 	return string(raw)
 }
 
-// isSSOSettingKey reports whether name belongs to the SSO namespace, which is
-// served by the dedicated /api/v1/sso endpoints only.
-func isSSOSettingKey(name string) bool {
-	return strings.HasPrefix(name, "openid.")
+// isProtectedSettingKey reports whether name belongs to a namespace served by its
+// own endpoints (/api/v1/sso, /api/v1/mail), which never return a stored secret.
+func isProtectedSettingKey(name string) bool {
+	return strings.HasPrefix(name, "openid.") || strings.HasPrefix(name, "mail.")
 }
 
 // openIDEnabled reports whether the OpenID Connect provider is usable; it is

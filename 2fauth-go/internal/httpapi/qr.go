@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -9,7 +10,7 @@ import (
 
 	"github.com/skip2/go-qrcode"
 
-	"2fauth/internal/crypt"
+	"2fauth/internal/services"
 )
 
 // qrDataURI renders a QR code as a PNG data URI (mirrors chillerlan render()).
@@ -31,29 +32,28 @@ const maxUploadSize = 6 << 20
 
 // uploadedFile extracts a file from a multipart or urlencoded request.
 func uploadedFile(r *http.Request, field string) ([]byte, string, error) {
-	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
 		return nil, "", err
 	}
+	defer func() { _ = r.MultipartForm.RemoveAll() }()
 	file, header, err := r.FormFile(field)
 	if err != nil {
 		return nil, "", err
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, maxUploadSize))
+	data, err := io.ReadAll(io.LimitReader(file, maxUploadSize+1))
 	if err != nil {
 		return nil, "", err
+	}
+	if len(data) > maxUploadSize {
+		return nil, "", errors.New("file too large")
 	}
 	return data, header.Filename, nil
 }
 
-// verifyPassword checks a password against a bcrypt hash.
-func verifyPassword(hash, password string) bool {
-	return crypt.CheckPassword(hash, password)
-}
-
 // iconIfExists returns the icon name when the file exists, nil otherwise.
 func (s *Server) iconIfExists(name string) any {
-	if name == "" || !s.icons.Exists(name) {
+	if !services.ValidIconName(name) || !s.icons.Exists(name) {
 		return nil
 	}
 	return name
@@ -83,7 +83,7 @@ func (s *Server) iconBase64(name string) any {
 func (s *Server) serveIcon(c *ctx) {
 	name := strings.TrimPrefix(c.r.URL.Path, s.baseURL()+"/storage/icons/")
 	name = strings.TrimPrefix(name, "/")
-	if name == "" || strings.Contains(name, "..") {
+	if !services.ValidIconName(name) {
 		http.NotFound(c.w, c.r)
 		return
 	}
@@ -92,7 +92,16 @@ func (s *Server) serveIcon(c *ctx) {
 		http.NotFound(c.w, c.r)
 		return
 	}
-	c.w.Header().Set("Content-Type", s.icons.MimeType(name))
+	// Whatever was stored by an older build, only an image leaves this endpoint, and
+	// even an SVG opened directly in a tab runs no script and reaches no resource.
+	mimeType := s.icons.MimeType(name)
+	if !strings.HasPrefix(mimeType, "image/") {
+		http.NotFound(c.w, c.r)
+		return
+	}
+	c.w.Header().Set("Content-Type", mimeType)
+	c.w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox")
+	c.w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	c.w.Header().Set("Cache-Control", "public, max-age=604800")
 	_, _ = c.w.Write(content)
 }

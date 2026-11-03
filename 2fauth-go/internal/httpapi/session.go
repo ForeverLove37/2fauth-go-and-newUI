@@ -3,9 +3,9 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"2fauth/internal/crypt"
+	"2fauth/internal/store"
 )
 
 // sessionCookieName mirrors config('session.cookie') for APP_NAME=2FAuth.
@@ -14,28 +14,31 @@ const sessionCookieName = "2fauth_session"
 // xsrfCookieName is the CSRF cookie read by axios.
 const xsrfCookieName = "XSRF-TOKEN"
 
-// session is the state carried by the encrypted session cookie.
+// session is the state carried by the encrypted session cookie. Being signed in is
+// decided by the user_sessions row SID points to, never by the cookie alone.
 type session struct {
-	UserID       int64  `json:"user_id"`
-	CSRFToken    string `json:"csrf_token"`
-	LastActivity int64  `json:"last_activity"`
-	Locked       bool   `json:"locked"`
-	Regenerated  bool   `json:"-"`
+	UserID    int64  `json:"user_id"`
+	SID       string `json:"sid,omitempty"`
+	CSRFToken string `json:"csrf_token"`
 }
 
-// newSession builds a fresh session with a CSRF token.
+// newSession builds a fresh anonymous session with a CSRF token.
 func newSession() *session {
-	return &session{
-		CSRFToken:    crypt.RandomString(40),
-		LastActivity: time.Now().Unix(),
-	}
+	return &session{CSRFToken: crypt.RandomString(40)}
 }
 
-// regenerate rotates the session identifier and CSRF token.
-func (s *session) regenerate() {
-	s.CSRFToken = crypt.RandomString(40)
-	s.Locked = false
-	s.LastActivity = time.Now().Unix()
+// signIn opens a server-side session for the user, replacing any previous one of
+// this browser, and rotates the CSRF token.
+func (s *Server) signIn(c *ctx, user *store.User) error {
+	if c.session != nil && c.session.SID != "" {
+		_ = s.st.DeleteSession(c.session.SID)
+	}
+	sid, err := s.st.CreateSession(user.ID, s.clientIP(c.r), c.r.UserAgent())
+	if err != nil {
+		return err
+	}
+	c.session = &session{UserID: user.ID, SID: sid, CSRFToken: crypt.RandomString(40)}
+	return nil
 }
 
 // loadSession reads the encrypted session cookie.
@@ -76,7 +79,7 @@ func (s *Server) persistSession(w http.ResponseWriter, sess *session) {
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   s.cfg.SessionLifetime * 60,
+		MaxAge:   s.cfg.SessionMaxAge * 60,
 	})
 	// The XSRF cookie is readable by JavaScript on purpose (axios needs it).
 	http.SetCookie(w, &http.Cookie{
@@ -86,7 +89,7 @@ func (s *Server) persistSession(w http.ResponseWriter, sess *session) {
 		HttpOnly: false,
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   s.cfg.SessionLifetime * 60,
+		MaxAge:   s.cfg.SessionMaxAge * 60,
 	})
 }
 
@@ -114,7 +117,7 @@ func (s *Server) cookiePath() string {
 	return "/"
 }
 
-// isHTTPS reports whether the request reached the app over TLS.
+// isHTTPS reports whether the app is published over TLS.
 func (s *Server) isHTTPS() bool {
 	return s.forceHTTPS
 }

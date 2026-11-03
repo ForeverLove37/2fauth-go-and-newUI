@@ -6,10 +6,11 @@ import Icon from '../components/Icon'
 import ThemeEditor from './ThemeEditor'
 import IconProvidersPanel from '../components/IconProvidersPanel'
 import SsoSettingsPanel from '../components/SsoSettingsPanel'
+import MailSettingsPanel from '../components/MailSettingsPanel'
 import { useI18nStore, useT } from '../i18n'
 import { useStore } from '../store/useStore'
 
-type Tab = 'theme' | 'options' | 'account' | 'security' | 'sso' | 'admin'
+type Tab = 'theme' | 'options' | 'account' | 'security' | 'sso' | 'mail' | 'admin'
 
 /** Locales that actually ship a catalogue; anything else falls back to English. */
 const languages = ['browser', 'en', 'zh-CN', 'zh-TW']
@@ -28,7 +29,7 @@ export default function Settings() {
     <div className="stage" style={{ overflow: 'auto' }}>
       <div style={{ padding: '18px 26px 40px', maxWidth: 1020, margin: '0 auto', width: '100%' }}>
         <div className="tabs" style={{ marginBottom: 20 }}>
-          {(['theme', 'options', 'account', 'security', ...(user?.is_admin ? (['sso', 'admin'] as Tab[]) : [])] as Tab[]).map((item) => (
+          {(['theme', 'options', 'account', 'security', ...(user?.is_admin ? (['sso', 'mail', 'admin'] as Tab[]) : [])] as Tab[]).map((item) => (
             <button
               key={item}
               className={tab === item ? 'active' : ''}
@@ -47,7 +48,9 @@ export default function Settings() {
                       ? t('Security')
                       : item === 'sso'
                         ? t('Single sign-on')
-                        : t('Admin')}
+                        : item === 'mail'
+                          ? t('E-mail')
+                          : t('Admin')}
             </button>
           ))}
         </div>
@@ -57,6 +60,7 @@ export default function Settings() {
         {tab === 'account' && <AccountTab />}
         {tab === 'security' && <SecurityTab />}
         {tab === 'sso' && <SsoSettingsPanel />}
+        {tab === 'mail' && <MailSettingsPanel />}
         {tab === 'admin' && <AdminTab />}
       </div>
     </div>
@@ -201,6 +205,8 @@ function AccountTab() {
   const [password, setPassword] = useState('')
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [params] = useSearchParams()
+  const verifiedParam = params.get('email_verified')
 
   useEffect(() => {
     setName(user?.name ?? '')
@@ -218,10 +224,19 @@ function AccountTab() {
     }
   }
 
+  async function sendVerification() {
+    try {
+      await api.sendEmailVerification()
+      toast('success', t('Check your mailbox for the confirmation link'))
+    } catch (caught) {
+      toast('error', (caught as ApiError).message)
+    }
+  }
+
   async function savePassword() {
     try {
       await api.updatePassword(currentPassword, newPassword)
-      toast('success', t('Password changed'))
+      toast('success', t('Password changed. Your other devices were signed out and your tokens revoked.'))
       setCurrentPassword('')
       setNewPassword('')
     } catch (caught) {
@@ -256,6 +271,16 @@ function AccountTab() {
           <button className="btn primary" onClick={saveProfile}>
             {t('Save profile')}
           </button>
+          {verifiedParam === 'ok' && <p className="hint" role="status" style={{ marginTop: 12 }}>{t('Your e-mail address is confirmed.')}</p>}
+          {verifiedParam === 'invalid' && <p className="error-text" style={{ marginTop: 12 }}>{t('This confirmation link is invalid or expired.')}</p>}
+          {user && !user.email_verified && (
+            <div className="flex wrap" style={{ marginTop: 12 }}>
+              <span className="hint">{t('This e-mail address is not confirmed yet.')}</span>
+              <button className="btn small" onClick={() => void sendVerification()}>
+                {t('Send a confirmation link')}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -515,6 +540,58 @@ function AdminTab() {
             value={Boolean(settings.checkForUpdate)}
             onChange={(value) => void toggleSetting('checkForUpdate', value)}
           />
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>{t('Sign-in policy')}</h2>
+            <p>{t('Who can sign in and who can create an account.')}</p>
+          </div>
+        </div>
+        <div className="panel-body">
+          <Toggle
+            label={t('Require single sign-on')}
+            hint={t('Password sign-in stays available to administrators only, as a way back in')}
+            value={Boolean(settings.useSsoOnly)}
+            onChange={(value) => void toggleSetting('useSsoOnly', value)}
+          />
+          <Toggle
+            label={t('Keep SSO sign-ups open')}
+            hint={t('New SSO users can register even when registrations are closed')}
+            value={Boolean(settings.keepSsoRegistrationEnabled)}
+            onChange={(value) => void toggleSetting('keepSsoRegistrationEnabled', value)}
+          />
+          <Toggle
+            label={t('Restrict registrations')}
+            hint={t('Only the addresses below can create an account')}
+            value={Boolean(settings.restrictRegistration)}
+            onChange={(value) => void toggleSetting('restrictRegistration', value)}
+          />
+          {Boolean(settings.restrictRegistration) && (
+            <>
+              <div className="field" style={{ marginTop: 12 }}>
+                <label htmlFor="restrict-list">{t('Addresses or @domains, one per line')}</label>
+                <textarea
+                  id="restrict-list"
+                  value={String(settings.restrictList ?? '')}
+                  onChange={(event) => setSettings((current) => ({ ...current, restrictList: event.target.value }))}
+                  onBlur={(event) => void toggleSetting('restrictList', event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="restrict-rule">{t('Rule: empty or "allow", "deny", or a regular expression that also allows')}</label>
+                <input
+                  id="restrict-rule"
+                  className="input"
+                  value={String(settings.restrictRule ?? '')}
+                  onChange={(event) => setSettings((current) => ({ ...current, restrictRule: event.target.value }))}
+                  onBlur={(event) => void toggleSetting('restrictRule', event.target.value)}
+                />
+              </div>
+            </>
+          )}
         </div>
       </div>
 

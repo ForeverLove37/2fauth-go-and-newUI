@@ -1,0 +1,16 @@
+{{define "body"}}<tr>
+  <td class="email-pad" style="padding:38px 44px 10px;">
+    <h1 class="email-title" style="margin:0 0 14px;color:#101727;font-size:30px;line-height:40px;font-weight:700;">{{if .ZH}}新设备登录了你的账户{{else}}New sign-in to your account{{end}}</h1>
+    <p style="margin:0 0 20px;color:#101727;font-size:17px;line-height:30px;">{{if .ZH}}<strong>{{.V.Email}}</strong> 刚刚从一个没有记录过的地址或浏览器登录。{{else}}<strong>{{.V.Email}}</strong> just signed in from an address or browser we haven't seen before.{{end}}</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid #dfe4ec;">
+      {{if .ZH}}{{$method := "单点登录"}}{{if eq .V.Method "password"}}{{$method = "密码"}}{{end}}{{template "fact" (fact "时间" .V.Time)}}{{template "fact" (fact "IP 地址" .V.IP)}}{{template "fact" (fact "浏览器" .V.Browser)}}{{template "fact" (fact "系统" .V.Platform)}}{{template "fact" (fact "登录方式" $method)}}
+      {{else}}{{$method := "single sign-on"}}{{if eq .V.Method "password"}}{{$method = "password"}}{{end}}{{template "fact" (fact "Time" .V.Time)}}{{template "fact" (fact "IP address" .V.IP)}}{{template "fact" (fact "Browser" .V.Browser)}}{{template "fact" (fact "System" .V.Platform)}}{{template "fact" (fact "Method" $method)}}{{end}}
+    </table>
+  </td>
+</tr>
+<tr>
+  <td class="email-pad" style="padding:24px 44px 38px;">
+    <p style="margin:0 0 20px;color:#101727;font-size:16px;line-height:28px;">{{if .ZH}}是你本人的话，不需要做任何操作。如果不是，请立即修改密码：这会让所有其他设备退出登录。{{else}}If this was you, there is nothing to do. If it wasn't, change your password now: this signs out every other device.{{end}}</p>
+    {{if .ZH}}{{template "button" (btn .V.SecurityURL "检查账户安全")}}{{else}}{{template "button" (btn .V.SecurityURL "Review account security")}}{{end}}
+  </td>
+</tr>{{end}}

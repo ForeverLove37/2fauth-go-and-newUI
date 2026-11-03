@@ -1,0 +1,19 @@
+{{define "subject"}}{{if .ZH}}{{.App}} 有一次失败的登录尝试{{else}}Failed sign-in attempt on {{.App}}{{end}}{{end}}
+{{define "preheader"}}{{if .ZH}}{{.V.Time}}，来自 {{.V.IP}}。账户没有被登录。{{else}}{{.V.Time}}, from {{.V.IP}}. The account was not signed in.{{end}}{{end}}
+{{define "text"}}{{if .ZH}}有人用错误的密码尝试登录 {{.V.Email}}。这次尝试没有成功。
+
+时间：{{.V.Time}}
+IP 地址：{{.V.IP}}
+浏览器：{{.V.Browser}}
+系统：{{.V.Platform}}
+
+如果是你输错了密码，可以忽略这封邮件。如果不是，建议换一个更长的密码：
+{{.V.SecurityURL}}{{else}}Someone tried to sign in to {{.V.Email}} with a wrong password. The attempt did not succeed.
+
+Time: {{.V.Time}}
+IP address: {{.V.IP}}
+Browser: {{.V.Browser}}
+System: {{.V.Platform}}
+
+If you mistyped your password, ignore this e-mail. If not, consider a longer password:
+{{.V.SecurityURL}}{{end}}{{end}}

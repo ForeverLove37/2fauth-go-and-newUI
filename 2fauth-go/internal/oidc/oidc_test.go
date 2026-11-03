@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -290,17 +291,10 @@ func TestUserInfo(t *testing.T) {
 		t.Fatal("expected an error for an invalid access token")
 	}
 
-	// Without a userinfo_endpoint the claims come from the token itself.
+	// An access token is never read as a source of claims.
 	noUserInfo := &Provider{Issuer: "https://idp.example.com"}
-	fallback, err := UserInfo(context.Background(), noUserInfo, fakeIDToken(t, map[string]any{"sub": "xyz"}))
-	if err != nil {
-		t.Fatalf("UserInfo fallback: %v", err)
-	}
-	if fallback["sub"] != "xyz" {
-		t.Errorf("fallback claims = %v", fallback)
-	}
-	if _, err := UserInfo(context.Background(), noUserInfo, "not-a-jwt"); err == nil {
-		t.Fatal("expected ErrNoUserInfoEndpoint")
+	if _, err := UserInfo(context.Background(), noUserInfo, fakeIDToken(t, map[string]any{"sub": "xyz"})); !errors.Is(err, ErrNoUserInfoEndpoint) {
+		t.Fatalf("UserInfo without an endpoint = %v", err)
 	}
 }
 

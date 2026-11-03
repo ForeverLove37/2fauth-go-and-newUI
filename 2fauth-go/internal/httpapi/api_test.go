@@ -6,18 +6,27 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"2fauth/internal/config"
 	"2fauth/internal/crypt"
 	"2fauth/internal/db"
+	otpgen "2fauth/internal/otp"
 	"2fauth/internal/services"
 	"2fauth/internal/store"
 )
 
 // testServer builds a Server backed by a temporary SQLite database.
 func testServer(t *testing.T) *Server {
+	t.Helper()
+	return testServerWith(t, nil)
+}
+
+// testServerWith builds a test server after letting the test adjust its configuration.
+func testServerWith(t *testing.T, adjust func(*config.Config)) *Server {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -38,6 +47,9 @@ func testServer(t *testing.T) *Server {
 		t.Fatalf("write entry: %v", err)
 	}
 	cfg.AssetsPath = assets
+	if adjust != nil {
+		adjust(cfg)
+	}
 
 	conn, err := db.Open("sqlite", filepath.Join(dir, "test.sqlite"))
 	if err != nil {
@@ -53,6 +65,7 @@ func testServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("crypt.New: %v", err)
 	}
+	st.SetCipher(enc)
 	srv, err := New(Options{
 		Config:   cfg,
 		Store:    st,
@@ -204,9 +217,14 @@ func TestRegisterLoginAndOtpFlow(t *testing.T) {
 		t.Error("TOTP payload has no next_password")
 	}
 
-	// Reading the collection with withOtp honours the `at` parameter. The value
-	// below is the TOTP of JBSWY3DPEHPK3PXP at that timestamp (independently computed).
-	rec = c.do(http.MethodGet, "/api/v1/twofaccounts?withOtp=1&at=1111111109", "", nil)
+	// Reading the collection with withOtp honours the `at` parameter within the
+	// current window, and ignores a timestamp further away.
+	at := time.Now().Unix() - 10
+	want, err := otpgen.Code(otpgen.Account{Type: otpgen.TypeTOTP, Secret: "JBSWY3DPEHPK3PXP", Digits: 6}, at)
+	if err != nil {
+		t.Fatalf("otp.Code: %v", err)
+	}
+	rec = c.do(http.MethodGet, "/api/v1/twofaccounts?withOtp=1&at="+strconv.FormatInt(at, 10), "", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("withOtp list = %d", rec.Code)
 	}
@@ -215,8 +233,8 @@ func TestRegisterLoginAndOtpFlow(t *testing.T) {
 		t.Fatalf("withOtp list length = %d", len(items))
 	}
 	embedded, _ := items[0].(map[string]any)["otp"].(map[string]any)
-	if embedded["password"] != "071271" {
-		t.Errorf("otp at 1111111109 = %v, want 071271", embedded["password"])
+	if embedded["password"] != want {
+		t.Errorf("otp at %d = %v, want %v", at, embedded["password"], want)
 	}
 	if _, leaked := items[0].(map[string]any)["secret"]; leaked {
 		t.Error("the collection leaked the secret without withSecret")

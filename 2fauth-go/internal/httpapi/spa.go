@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"2fauth/internal/crypt"
 )
 
 // spaAssets holds the parsed Vite manifest and the document template.
@@ -98,7 +100,7 @@ const landingTemplate = `<!DOCTYPE html>
     <div id="app">
         <app></app>
     </div>
-    <script type="text/javascript">
+    <script type="text/javascript" nonce="{{.Nonce}}">
         var appSettings = {{.AppSettings}};
         var appConfig = {{.AppConfig}};
         var urls = {{.Urls}};
@@ -131,7 +133,7 @@ func (s *Server) serveSPA(c *ctx) {
 	}
 
 	appConfig := map[string]any{
-		"proxyAuth":      s.cfg.AuthenticationGuard == "reverse-proxy-guard",
+		"proxyAuth":      s.cfg.AuthenticationGuard == guardReverseProxy,
 		"proxyLogoutUrl": falseIfEmpty(s.cfg.ProxyLogoutURL),
 		"sso": map[string]any{
 			"openid": s.cfg.OpenIDClientSecret != "",
@@ -152,7 +154,14 @@ func (s *Server) serveSPA(c *ctx) {
 		lang = l
 	}
 
+	// The upstream shell has an inline script: only this one is allowed to run.
+	nonce := crypt.RandomString(24)
+	if s.cfg.ContentSecurityPolicy {
+		c.w.Header().Set("Content-Security-Policy", strings.Replace(baseCSP, "script-src 'self'", "script-src 'self' 'nonce-"+nonce+"'", 1))
+	}
+
 	data := map[string]any{
+		"Nonce":              nonce,
 		"Theme":              theme,
 		"Lang":               lang,
 		"Description":        "A Web app to manage your Two-Factor Authentication (2FA) accounts and generate their security codes",
@@ -236,6 +245,10 @@ func (s *Server) baseURL() string {
 
 // serveStatic serves the built front-end assets and the public files.
 func (s *Server) serveStatic(c *ctx) {
+	if s.spa == nil {
+		http.NotFound(c.w, c.r)
+		return
+	}
 	rel := strings.TrimPrefix(c.r.URL.Path, s.baseURL())
 	rel = strings.TrimPrefix(rel, "/")
 	if strings.Contains(rel, "..") {

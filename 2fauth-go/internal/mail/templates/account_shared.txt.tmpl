@@ -1,0 +1,13 @@
+{{define "subject"}}{{if .ZH}}{{.V.OwnerName}} 与你共享了 {{.V.Label}}{{else}}{{.V.OwnerName}} shared {{.V.Label}} with you{{end}}{{end}}
+{{define "preheader"}}{{if .ZH}}你可以在 {{.App}} 中为这个账户生成验证码。{{else}}You can now generate its codes in {{.App}}.{{end}}{{end}}
+{{define "text"}}{{if .ZH}}{{.V.OwnerName}} 与你共享了 {{.V.Label}}{{if .V.Account}}（{{.V.Account}}）{{end}}。你现在可以在 {{.App}} 中为这个账户生成验证码。
+
+共享只包含生成验证码的权限，你看不到也无法导出它的密钥。所有者可以随时取消共享，每次生成验证码都会记录在日志中。
+
+打开账户列表：
+{{.V.AppURL}}{{else}}{{.V.OwnerName}} shared {{.V.Label}}{{if .V.Account}} ({{.V.Account}}){{end}} with you. You can now generate codes for this account in {{.App}}.
+
+Sharing only lets you generate codes: you cannot see or export the secret. The owner can stop sharing at any time, and each generated code is logged.
+
+Open my accounts:
+{{.V.AppURL}}{{end}}{{end}}

@@ -2,7 +2,7 @@
 
 一个面向自托管场景的 2FAuth 重实现项目：使用 Go 提供兼容 2FAuth v9 的 HTTP API、会话认证、OTP 生成和数据存储，并使用 React、TypeScript 与 React Three Fiber 提供现代化管理界面。
 
-> 本项目包含实验性重实现内容。部署到公网前，请先完成安全审计、依赖检查和端到端验证。
+> 本项目包含实验性重实现内容。部署到公网前，请阅读下面的「安全设计」，并完成你自己的依赖检查和端到端验证。
 
 ## 项目结构
 
@@ -10,7 +10,8 @@
 .
 ├── 2fauth-go/       Go 后端、API、数据库、认证和 OTP 逻辑
 ├── 2fauth-ui/       React + TypeScript 前端面板
-└── .gitignore
+├── Dockerfile       构建前后端的多阶段镜像
+└── .github/         CI：测试、三种数据库、漏洞扫描
 ```
 
 后端可以兼容上游 2FAuth v9 的主要 `/api/v1` JSON 接口。前端构建后由 Go 服务提供；如果没有部署 React 构建产物，服务也可以回退到上游 Vue 前端资源。
@@ -18,11 +19,14 @@
 ## 主要功能
 
 - TOTP、HOTP 和 Steam TOTP
-- OTP 账户的创建、编辑、删除、分组、收藏、排序和导入导出
+- OTP 账户的创建、编辑、删除、分组、收藏和排序
+- 多格式导入：2FAuth、Aegis（含加密）、2FAS（含加密）、Google Authenticator 迁移、Bitwarden、andOTP、FreeOTP+、Authenticator Pro、Raivo、LastPass、Proton Authenticator、CSV、otpauth 列表，详见 [`docs/IMPORT.md`](2fauth-go/docs/IMPORT.md)
+- 加密导出（argon2id + AES-256-GCM），也可以导出明文 JSON 或 otpauth 列表
+- SMTP 发信：密码重置、邮箱确认、新设备登录、登录失败、密码修改、共享和转移通知，以及测试邮件
 - QR Code 解析与生成
 - SQLite、MySQL 和 PostgreSQL 数据库支持
 - 加密会话 Cookie、CSRF 防护和 Personal Access Token
-- 用户注册、登录、密码修改和管理员管理
+- 用户注册、登录、密码修改、找回密码、邮箱确认和管理员管理
 - 账户共享及 OTP 生成日志
 - OpenID Connect 登录、PKCE 和 provider discovery
 - 图标上传、删除和可配置的图标 provider chain
@@ -33,7 +37,7 @@
 
 ## 环境要求
 
-- Go 1.26 或更高版本
+- Go 1.26.10 或更高版本
 - Node.js 18+，推荐使用 npm
 - SQLite 可直接使用；MySQL 或 PostgreSQL 需要单独准备数据库服务
 
@@ -56,7 +60,7 @@ cd ../2fauth-go
 cp .env.example .env
 ```
 
-至少需要设置 `APP_KEY`。可以使用 Go 命令生成：
+至少需要设置 `APP_KEY`。可以使用 Go 命令生成，它会把 `.env` 权限设为 600；已有密钥时默认拒绝覆盖：
 
 ```bash
 go run ./cmd/2fauth key:generate
@@ -91,6 +95,33 @@ LISTEN_ADDR=127.0.0.1:8000 UI_ASSETS_PATH=../2fauth-ui/dist ./2fauth
 
 然后访问 <http://localhost:8000>。首次注册的用户会成为管理员。
 
+也可以直接构建容器：
+
+```bash
+docker build -t 2fauth .
+docker run -p 8000:8000 -v 2fauth-data:/data -e APP_KEY=base64:... -e APP_URL=http://localhost:8000 2fauth
+```
+
+### 只允许特定地址访问
+
+`ALLOWED_CLIENT_IPS` 接受地址或 CIDR 网段，名单外的连接在 TLS 和 HTTP 之前就被关闭。它看的是 TCP 对端地址，不看任何请求头；放在反向代理后面时，这里要写代理的地址。
+
+```dotenv
+LISTEN_ADDR=192.168.1.237:8444
+ALLOWED_CLIENT_IPS=192.168.1.118
+TLS_CERT_FILE=/path/to/cert.pem
+TLS_KEY_FILE=/path/to/key.pem
+APP_URL=https://192.168.1.237:8444
+```
+
+### 忘记管理员密码
+
+```bash
+2fauth user:reset-password admin@example.com
+```
+
+命令会打印一个新的随机密码，并结束该账户的所有会话和访问令牌。
+
 ## 开发流程
 
 后端：
@@ -123,7 +154,8 @@ npm run dev
 - 数据库连接参数
 - Session、CSRF、登录限流和反向代理认证
 - OIDC issuer、client ID、client secret 和登录行为
-- 邮件、WebAuthn 和图标 provider 配置
+- 邮件（也可在面板「设置 > 邮件」中修改）、WebAuthn 和图标 provider 配置
+- 来源地址白名单（`ALLOWED_CLIENT_IPS`）和原生 TLS（`TLS_CERT_FILE`、`TLS_KEY_FILE`）
 - 用户偏好默认值及锁定策略
 
 建议生产环境将应用放在 HTTPS 反向代理后，并正确配置 `APP_URL`、`SESSION_SECURE_COOKIE` 和可信代理。不要仅依赖客户端传入的 `X-Forwarded-*` 请求头来实现安全策略。
@@ -132,17 +164,22 @@ npm run dev
 
 项目数据库结构尽量保持与上游 2FAuth v9 一致。推荐使用上游导出的 JSON 在新实例中导入账户。
 
-如果直接复用已有 SQLite 数据库，需要同时使用原实例的 `APP_KEY`，否则无法解密既有的加密字段。迁移前请备份数据库，并验证账户数量、OTP secret 和 HOTP counter。
+如果直接复用已有 SQLite 数据库，需要同时使用原实例的 `APP_KEY`，否则无法解密既有的加密字段。首次启动时，明文保存的 OTP secret 会被加密，所以迁移前请备份数据库，之后验证账户数量、OTP secret 和 HOTP counter。
 
-## 安全状态
+## 安全设计
 
-本仓库当前仍处于审计和验证阶段。特别是在公开部署前，请重点复核：
+- **密钥加密**：OTP 密钥、SMTP 密码和 SSO 客户端密钥用 `APP_KEY` 加密存储，启动时会自动加密旧的明文记录。`APP_KEY` 要和数据库分开备份，丢失后密钥无法恢复。
+- **会话**：会话记录在服务端。登出、改密码和管理员重置密码都会立即生效，改密码还会吊销所有个人访问令牌。
+- **SSO**：严格校验 ID Token 的签名、`iss`、`aud`、`exp` 和 `nonce`，只信任 `email_verified=true` 的邮箱。把未验证邮箱的本地账户关联到 SSO 时，会同时作废它原有的密码、会话和令牌，防止抢注。
+- **上传**：图标按内容判断类型，SVG 按白名单重写；图标响应带 `nosniff` 和沙箱 CSP。
+- **共享**：共享只授予生成验证码的权限，接收者看不到也导出不了密钥。
+- **限流**：登录按地址和账户分别限流，注册、找回密码、导入和 API 也有限额。`X-Forwarded-For` 只对 `TRUSTED_PROXIES` 中的对端生效。
 
-- OIDC 回调是否严格验证 ID Token 签名、issuer、audience、有效期、nonce 和 `email_verified`
-- 反向代理信任边界及 `X-Forwarded-For` 的处理
-- 多数据库方言下的迁移语句
-- 上传请求体大小、文件内容类型和存储目录权限
-- 生产环境的 HTTPS、Cookie、备份和日志策略
+部署到公网时：
+
+- 使用 HTTPS，并正确设置 `APP_URL`。
+- 确认注册策略：默认开放注册，第一个注册的用户是管理员。
+- 定期备份数据库和 `APP_KEY`。
 
 发现安全问题时，请不要在公开 Issue 中发布凭据、APP_KEY、数据库或 OTP secret。
 

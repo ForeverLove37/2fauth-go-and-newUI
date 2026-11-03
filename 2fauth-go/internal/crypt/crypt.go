@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -109,10 +110,6 @@ func (e *Encrypter) DecryptString(encrypted string) (string, error) {
 		return "", ErrInvalidPayload
 	}
 	if p.IV == "" || p.Value == "" || p.Mac == "" {
-		// tolerate a plaintext value so mixed installs keep working
-		if !strings.HasPrefix(encrypted, "eyJ") {
-			return encrypted, nil
-		}
 		return "", ErrInvalidPayload
 	}
 	expected := e.hash(p.IV, p.Value, p.Tag)
@@ -175,8 +172,33 @@ func (e *Encrypter) hash(iv, value, tag string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// kdfSlots bounds the concurrent password hashing work, so a burst of login,
+// registration or encrypted import requests cannot exhaust every CPU core.
+var kdfSlots = make(chan struct{}, max(2, runtime.NumCPU()))
+
+// AcquireKDF reserves a slot for an expensive key derivation; call the returned
+// function to release it.
+func AcquireKDF() func() {
+	kdfSlots <- struct{}{}
+	return func() { <-kdfSlots }
+}
+
+// MaxPasswordBytes is the longest password bcrypt can hash.
+const MaxPasswordBytes = 72
+
+// dummyHash is compared when an account does not exist, so that an unknown e-mail
+// costs the same time as a wrong password.
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("2fauth-timing-equaliser"), 12)
+
+// BurnPasswordCheck spends the time of a real password verification.
+func BurnPasswordCheck(plain string) {
+	defer AcquireKDF()()
+	_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(plain))
+}
+
 // HashPassword returns a bcrypt hash compatible with Laravel's Hash::make().
 func HashPassword(plain string) (string, error) {
+	defer AcquireKDF()()
 	b, err := bcrypt.GenerateFromPassword([]byte(plain), 12)
 	if err != nil {
 		return "", err
@@ -186,6 +208,7 @@ func HashPassword(plain string) (string, error) {
 
 // CheckPassword verifies a password against a Laravel bcrypt hash.
 func CheckPassword(hashed, plain string) bool {
+	defer AcquireKDF()()
 	return bcrypt.CompareHashAndPassword([]byte(hashed), []byte(plain)) == nil
 }
 
@@ -193,13 +216,24 @@ const laravelAlpha = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV
 
 // RandomString mirrors Str::random(): a base62 string of length n.
 func RandomString(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	out := make([]byte, n)
-	for i, v := range b {
-		out[i] = laravelAlpha[int(v)%len(laravelAlpha)]
+	// Bytes above the largest multiple of the alphabet size are discarded, so
+	// every character stays equally likely.
+	limit := byte(256 - 256%len(laravelAlpha))
+	out := make([]byte, 0, n)
+	b := make([]byte, n+n/4+8)
+	for len(out) < n {
+		if _, err := rand.Read(b); err != nil {
+			panic(err)
+		}
+		for _, v := range b {
+			if v >= limit {
+				continue
+			}
+			out = append(out, laravelAlpha[int(v)%len(laravelAlpha)])
+			if len(out) == n {
+				break
+			}
+		}
 	}
 	return string(out)
 }

@@ -60,9 +60,11 @@ export interface User {
   appSettings: AppSettings
   is_admin: boolean
   authenticated_by_proxy?: boolean
+  email_verified?: boolean
 }
 
 export interface FrontendConfig {
+  mailEnabled?: boolean
   appName: string
   appVersion: string
   subdirectory: string
@@ -107,4 +109,5 @@ export interface ShareRecipient {
 export interface ApiError extends Error {
   status: number
   errors?: Record<string, string[]>
+  needsPassphrase?: boolean
 }

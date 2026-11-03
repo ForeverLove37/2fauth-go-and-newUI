@@ -1,3 +1,5 @@
+import { BASE } from './client'
+
 export interface SsoDiscovery {
   issuer: string
   authorization_endpoint: string
@@ -11,9 +13,9 @@ export interface SsoConfig {
   provider: string
   label: string
   auto_redirect: boolean
-  auto_register: boolean
-  issuer: string
-  redirect_uri: string
+  auto_register?: boolean
+  issuer?: string
+  redirect_uri?: string
   start_url: string
   discovery: SsoDiscovery | null
   error: string | null
@@ -28,6 +30,7 @@ export interface SsoSettings {
   label: string
   auto_register: boolean
   auto_redirect: boolean
+  trust_unverified_email: boolean
   redirect_uri: string
 }
 
@@ -53,17 +56,17 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   const match = document.cookie.match(/(^|;\s*)XSRF-TOKEN=([^;]*)/)
   if (match && method !== 'GET') headers['X-XSRF-TOKEN'] = decodeURIComponent(match[2])
 
-  let response = await fetch(path, {
+  let response = await fetch(BASE + path, {
     method,
     headers,
     credentials: 'same-origin',
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (response.status === 419) {
-    await fetch('/refresh-csrf', { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+    await fetch(`${BASE}/refresh-csrf`, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
     const retryToken = document.cookie.match(/(^|;\s*)XSRF-TOKEN=([^;]*)/)
     if (retryToken) headers['X-XSRF-TOKEN'] = decodeURIComponent(retryToken[2])
-    response = await fetch(path, {
+    response = await fetch(BASE + path, {
       method,
       headers,
       credentials: 'same-origin',

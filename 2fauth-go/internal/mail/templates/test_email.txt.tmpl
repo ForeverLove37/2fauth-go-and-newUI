@@ -1,0 +1,11 @@
+{{define "subject"}}{{if .ZH}}{{.App}} SMTP 测试邮件{{else}}{{.App}} SMTP test{{end}}{{end}}
+{{define "preheader"}}{{if .ZH}}收到这封邮件，说明发信配置可用。{{else}}Receiving this means the mail settings work.{{end}}{{end}}
+{{define "text"}}{{if .ZH}}{{.V.AdminName}} 在管理面板发送了这封测试邮件。能看到它，说明 {{.App}} 已经可以发送密码重置和安全提醒。
+
+SMTP 服务器：{{.V.Server}}
+加密方式：{{.V.Encryption}}
+发送时间：{{.V.Time}}{{else}}{{.V.AdminName}} sent this test from the admin panel. Receiving it means {{.App}} can deliver password resets and security alerts.
+
+SMTP server: {{.V.Server}}
+Encryption: {{.V.Encryption}}
+Sent at: {{.V.Time}}{{end}}{{end}}

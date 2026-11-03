@@ -1,22 +1,93 @@
 package httpapi
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"2fauth/internal/oidc"
 )
 
-// fakeIdP starts a minimal OpenID Connect provider with discovery, token and
+// testAuthNonce is the nonce of the last authorization request: the fake provider
+// puts it in its ID token, as a real one does after the browser went through it.
+var testAuthNonce string
+
+// testUserClaims are the claims of the fake provider's user.
+var testUserClaims map[string]any
+
+// testIDTokenPatch alters the next ID tokens, to test what the callback refuses.
+var testIDTokenPatch func(claims map[string]any)
+
+// testIDTokenSigner replaces the signature of the fake provider, when set.
+var testIDTokenSigner func(claims map[string]any) string
+
+func defaultUserClaims() map[string]any {
+	return map[string]any{
+		"sub":                "idp-user-1",
+		"email":              "sso@example.com",
+		"email_verified":     true,
+		"name":               "SSO User",
+		"preferred_username": "ssouser",
+	}
+}
+
+// signES256 returns a compact JWS of the claims.
+func signES256(t *testing.T, key *ecdsa.PrivateKey, claims map[string]any) string {
+	t.Helper()
+	encode := func(v any) string {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	input := encode(map[string]any{"alg": "ES256", "kid": "test-key"}) + "." + encode(claims)
+	sum := sha256.Sum256([]byte(input))
+	r, sig, err := ecdsa.Sign(rand.Reader, key, sum[:])
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	raw := make([]byte, 64)
+	r.FillBytes(raw[:32])
+	sig.FillBytes(raw[32:])
+	return input + "." + base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// fakeIdP starts a minimal OpenID Connect provider with discovery, token, key set and
 // userinfo endpoints, and returns it with its issuer URL.
 func fakeIdP(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	var srv *httptest.Server
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	testAuthNonce, testIDTokenPatch, testIDTokenSigner = "", nil, nil
+	testUserClaims = defaultUserClaims()
+
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		pub, err := key.PublicKey.Bytes()
+		if err != nil {
+			t.Errorf("public key: %v", err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]any{{
+			"kty": "EC", "crv": "P-256", "kid": "test-key", "use": "sig",
+			"x": base64.RawURLEncoding.EncodeToString(pub[1:33]),
+			"y": base64.RawURLEncoding.EncodeToString(pub[33:65]),
+		}}})
+	})
 
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -44,10 +115,28 @@ func fakeIdP(t *testing.T) *httptest.Server {
 			http.Error(w, "PKCE verifier missing", http.StatusBadRequest)
 			return
 		}
+		claims := map[string]any{
+			"iss":   srv.URL,
+			"aud":   "2fauth-test",
+			"sub":   testUserClaims["sub"],
+			"exp":   time.Now().Add(time.Minute).Unix(),
+			"iat":   time.Now().Unix(),
+			"nonce": testAuthNonce,
+		}
+		if testIDTokenPatch != nil {
+			testIDTokenPatch(claims)
+		}
+		idToken := ""
+		if testIDTokenSigner != nil {
+			idToken = testIDTokenSigner(claims)
+		} else {
+			idToken = signES256(t, key, claims)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  "idp-access-token",
 			"refresh_token": "idp-refresh-token",
+			"id_token":      idToken,
 			"token_type":    "Bearer",
 			"expires_in":    3600,
 		})
@@ -58,13 +147,7 @@ func fakeIdP(t *testing.T) *httptest.Server {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"sub":                "idp-user-1",
-			"email":              "sso@example.com",
-			"email_verified":     true,
-			"name":               "SSO User",
-			"preferred_username": "ssouser",
-		})
+		_ = json.NewEncoder(w).Encode(testUserClaims)
 	})
 
 	srv = httptest.NewServer(mux)
@@ -105,6 +188,7 @@ func startLogin(t *testing.T, c *client) (string, *httptest.ResponseRecorder) {
 	if err != nil {
 		t.Fatalf("parse authorize url %q: %v", rawURL, err)
 	}
+	testAuthNonce = authURL.Query().Get("nonce")
 	return authURL.Query().Get("state"), rec
 }
 
@@ -151,8 +235,27 @@ func TestOIDCConfigEndpoint(t *testing.T) {
 	if payload["enabled"] != true {
 		t.Fatalf("enabled = %v (%s)", payload["enabled"], rec.Body.String())
 	}
+	// The provider details are only for administrators.
+	for _, hidden := range []string{"issuer", "redirect_uri", "auto_register"} {
+		if _, leaked := payload[hidden]; leaked {
+			t.Errorf("anonymous sso/config exposes %s", hidden)
+		}
+	}
+	if payload["discovery"] != nil {
+		t.Errorf("anonymous discovery = %v, want null", payload["discovery"])
+	}
+	if payload["label"] != "Sign in with SSO" {
+		t.Errorf("label = %v", payload["label"])
+	}
+	admin := &client{t: t, srv: srv}
+	admin.do(http.MethodGet, "/", "", nil)
+	if rec := admin.do(http.MethodPost, "/user",
+		`{"name":"admin","email":"admin@example.com","password":"password123","password_confirmation":"password123"}`, nil); rec.Code != http.StatusCreated {
+		t.Fatalf("register admin = %d (%s)", rec.Code, rec.Body.String())
+	}
+	payload = jsonBody(t, admin.do(http.MethodGet, "/api/v1/sso/config", "", nil))
 	if payload["discovery"] == nil {
-		t.Fatal("discovery is null while enabled")
+		t.Fatal("discovery is null for an administrator while enabled")
 	}
 	discovery, _ := payload["discovery"].(map[string]any)
 	if discovery["issuer"] != idp.URL {
@@ -191,6 +294,9 @@ func TestOIDCConfigEndpoint(t *testing.T) {
 	payload = jsonBody(t, c.do(http.MethodGet, "/api/v1/sso/config", "", nil))
 	if payload["enabled"] != false {
 		t.Errorf("enabled with a broken issuer = %v", payload["enabled"])
+	}
+	if message, _ := payload["error"].(string); strings.Contains(message, "127.0.0.1") {
+		t.Errorf("anonymous error leaks the address: %q", message)
 	}
 	if message, _ := payload["error"].(string); message == "" {
 		t.Errorf("error = %v, want a discovery failure message", payload["error"])
@@ -240,6 +346,7 @@ func TestOIDCLoginFlow(t *testing.T) {
 	if query.Get("nonce") == "" {
 		t.Error("no nonce in the authorize URL")
 	}
+	testAuthNonce = query.Get("nonce")
 	state := query.Get("state")
 	if len(state) != 64 {
 		t.Errorf("state = %q (want 32 bytes hex)", state)
@@ -316,6 +423,7 @@ func TestOIDCLoginFlow(t *testing.T) {
 	// A second login resolves through the stored identity (no new user).
 	rec = c.do(http.MethodGet, "/socialite/redirect/openid?format=json", "", nil)
 	again, _ := url.Parse(jsonBody(t, rec)["url"].(string))
+	testAuthNonce = again.Query().Get("nonce")
 	rec = c.do(http.MethodGet, "/socialite/callback/openid?code=test&state="+again.Query().Get("state"), "", nil)
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/" {
 		t.Fatalf("second login = %d %q", rec.Code, rec.Header().Get("Location"))
@@ -457,7 +565,7 @@ func TestOIDCAdminEndpoints(t *testing.T) {
 		t.Error("the generated client carries no secret")
 	}
 	redirectURIs, _ := kcClient["redirectUris"].([]any)
-	if len(redirectURIs) != 2 || !strings.HasSuffix(redirectURIs[0].(string), "/socialite/callback/openid") {
+	if len(redirectURIs) != 1 || !strings.HasSuffix(redirectURIs[0].(string), "/socialite/callback/openid") {
 		t.Errorf("redirectUris = %v", kcClient["redirectUris"])
 	}
 	attributes, _ := kcClient["attributes"].(map[string]any)

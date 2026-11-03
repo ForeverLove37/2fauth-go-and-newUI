@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import Shell from './components/Shell'
 import { useI18nStore, useT } from './i18n'
-import { Login, Register } from './views/Auth'
+import { Login, PasswordLost, PasswordReset, Register } from './views/Auth'
 import { useStore } from './store/useStore'
 
 import Backdrop from './three/Backdrop'
@@ -88,6 +88,8 @@ export default function App() {
       <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/register" element={user ? <Navigate to="/" replace /> : <Register />} />
+      <Route path="/password/lost" element={<PasswordLost />} />
+      <Route path="/password/reset" element={<PasswordReset />} />
       <Route
         element={
           <Protected>

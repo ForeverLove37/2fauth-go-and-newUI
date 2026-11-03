@@ -27,6 +27,9 @@ type Account struct {
 	Counter   *int64
 	CreatedAt *time.Time
 	UpdatedAt *time.Time
+
+	// ImportIcon carries a base64 icon read from an import file; it is not a column.
+	ImportIcon string
 }
 
 // HOTP reports whether the account uses counter based OTP.
@@ -34,7 +37,7 @@ func (a *Account) HOTP() bool { return a.OTPType == "hotp" }
 
 const accountColumns = `id, user_id, group_id, service, legacy_uri, account, icon, otp_type, secret, algorithm, digits, period, counter, created_at, updated_at`
 
-func scanAccount(scan func(...any) error) (*Account, error) {
+func (s *Store) scanAccount(scan func(...any) error) (*Account, error) {
 	var (
 		a       Account
 		userID  db.NullInt
@@ -69,7 +72,7 @@ func scanAccount(scan func(...any) error) (*Account, error) {
 	a.Account = account.String
 	a.Icon = icon.String
 	a.OTPType = otpType.String
-	a.Secret = secret.String
+	a.Secret = s.openSecret(a.ID, secret.String)
 	a.Algorithm = alg.String
 	a.Digits = int(digits.Int)
 	if period.Valid {
@@ -94,7 +97,7 @@ func scanAccount(scan func(...any) error) (*Account, error) {
 // GetAccount returns an account by id, regardless of ownership.
 func (s *Store) GetAccount(id int64) (*Account, error) {
 	row := s.DB.QueryRow(`SELECT `+accountColumns+` FROM twofaccounts WHERE id = ?`, id)
-	return scanAccount(row.Scan)
+	return s.scanAccount(row.Scan)
 }
 
 // VisibleScope describes the sharing rules applied when listing accounts.
@@ -132,7 +135,7 @@ func (s *Store) ListVisibleAccounts(userID int64, scope VisibleScope, ids []int6
 	defer rows.Close()
 	var out []*Account
 	for rows.Next() {
-		a, err := scanAccount(rows.Scan)
+		a, err := s.scanAccount(rows.Scan)
 		if err != nil {
 			return nil, err
 		}
@@ -201,7 +204,7 @@ func (s *Store) AccountGroupID(a *Account, userID int64) (int64, error) {
 		return 0, nil
 	}
 	var gid int64
-	err := s.DB.QueryRow(`SELECT id FROM groups WHERE id = ? AND user_id = ?`, *a.GroupID, userID).Scan(&gid)
+	err := s.DB.QueryRow(`SELECT id FROM "groups" WHERE id = ? AND user_id = ?`, *a.GroupID, userID).Scan(&gid)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -214,15 +217,15 @@ func (s *Store) AccountGroupID(a *Account, userID int64) (int64, error) {
 // CreateAccount inserts a new account.
 func (s *Store) CreateAccount(a *Account) (*Account, error) {
 	now := db.NowValue(s.DB.Dialect)
-	res, err := s.DB.Exec(`INSERT INTO twofaccounts
-		(user_id, group_id, service, legacy_uri, account, icon, otp_type, secret, algorithm, digits, period, counter, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.UserID, nullableInt(a.GroupID), a.Service, a.LegacyURI, a.Account, a.Icon, a.OTPType, a.Secret,
-		a.Algorithm, a.Digits, nullableInt(toInt64Ptr(a.Period)), nullableBigInt(a.Counter), now, now)
+	sealed, err := s.sealSecret(a.Secret)
 	if err != nil {
 		return nil, err
 	}
-	id, err := res.LastInsertId()
+	id, err := s.DB.InsertID(`INSERT INTO twofaccounts
+		(user_id, group_id, service, legacy_uri, account, icon, otp_type, secret, algorithm, digits, period, counter, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.UserID, nullableInt(a.GroupID), a.Service, a.LegacyURI, a.Account, a.Icon, a.OTPType, sealed,
+		a.Algorithm, a.Digits, nullableInt(toInt64Ptr(a.Period)), nullableBigInt(a.Counter), now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -231,18 +234,27 @@ func (s *Store) CreateAccount(a *Account) (*Account, error) {
 
 // UpdateAccount persists every mutable field of an account.
 func (s *Store) UpdateAccount(a *Account) error {
-	_, err := s.DB.Exec(`UPDATE twofaccounts SET group_id = ?, service = ?, legacy_uri = ?, account = ?, icon = ?,
+	sealed, err := s.sealSecret(a.Secret)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(`UPDATE twofaccounts SET group_id = ?, service = ?, legacy_uri = ?, account = ?, icon = ?,
 		otp_type = ?, secret = ?, algorithm = ?, digits = ?, period = ?, counter = ?, updated_at = ? WHERE id = ?`,
-		nullableInt(a.GroupID), a.Service, a.LegacyURI, a.Account, a.Icon, a.OTPType, a.Secret, a.Algorithm,
+		nullableInt(a.GroupID), a.Service, a.LegacyURI, a.Account, a.Icon, a.OTPType, sealed, a.Algorithm,
 		a.Digits, nullableInt(toInt64Ptr(a.Period)), nullableBigInt(a.Counter), db.NowValue(s.DB.Dialect), a.ID)
 	return err
 }
 
-// UpdateCounter stores an incremented HOTP counter.
-func (s *Store) UpdateCounter(id int64, counter int64) error {
-	_, err := s.DB.Exec(`UPDATE twofaccounts SET counter = ?, updated_at = ? WHERE id = ?`,
-		counter, db.NowValue(s.DB.Dialect), id)
-	return err
+// AdvanceCounter moves an HOTP counter forward only when it still holds the value
+// the code was computed from, so two concurrent requests never share a code.
+func (s *Store) AdvanceCounter(id, from, to int64) (bool, error) {
+	res, err := s.DB.Exec(`UPDATE twofaccounts SET counter = ?, updated_at = ? WHERE id = ? AND counter = ?`,
+		to, db.NowValue(s.DB.Dialect), id, from)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // DeleteAccount removes one account.
@@ -275,7 +287,7 @@ func (s *Store) WithdrawAccounts(ids []int64, userID int64) error {
 // AssignAccountToGroup moves an account into one of the user's groups.
 func (s *Store) AssignAccountToGroup(accountID, groupID, userID int64) error {
 	var gid int64
-	err := s.DB.QueryRow(`SELECT id FROM groups WHERE id = ? AND user_id = ?`, groupID, userID).Scan(&gid)
+	err := s.DB.QueryRow(`SELECT id FROM "groups" WHERE id = ? AND user_id = ?`, groupID, userID).Scan(&gid)
 	if err != nil {
 		return err
 	}
@@ -395,9 +407,27 @@ func (s *Store) TransferOwnership(accountID, newOwnerID int64) error {
 		newOwnerID, db.NowValue(s.DB.Dialect), accountID); err != nil {
 		return err
 	}
-	_, err := s.DB.Exec(`DELETE FROM twofaccount_shares WHERE twofaccount_id = ? AND scope = 'user' AND shared_with_user_id = ?`,
-		accountID, newOwnerID)
+	// A share was a decision of the previous owner: it does not survive the transfer.
+	_, err := s.DB.Exec(`DELETE FROM twofaccount_shares WHERE twofaccount_id = ?`, accountID)
 	return err
+}
+
+// OwnedAccounts lists the accounts owned by a user.
+func (s *Store) OwnedAccounts(userID int64) ([]*Account, error) {
+	rows, err := s.DB.Query(`SELECT `+accountColumns+` FROM twofaccounts WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Account
+	for rows.Next() {
+		a, err := s.scanAccount(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 func nullableInt(v *int64) any {

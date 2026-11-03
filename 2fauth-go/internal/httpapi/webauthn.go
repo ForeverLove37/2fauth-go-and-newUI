@@ -61,7 +61,7 @@ func (s *Server) webauthnRenameCredential(c *ctx) {
 	if v.respond() {
 		return
 	}
-	id := c.param("id")
+	id := c.param("credential")
 	if id == "" || !s.st.RenameWebAuthnCredential(id, c.user.ID, name) {
 		jsonMessage(c.w, http.StatusNotFound, "not found")
 		return
@@ -71,7 +71,7 @@ func (s *Server) webauthnRenameCredential(c *ctx) {
 
 // webauthnDeleteCredential handles DELETE /webauthn/credentials/{id}.
 func (s *Server) webauthnDeleteCredential(c *ctx) {
-	id := c.param("id")
+	id := c.param("credential")
 	if id == "" || !s.st.DeleteWebAuthnCredential(id, c.user.ID) {
 		jsonMessage(c.w, http.StatusNotFound, "not found")
 		return

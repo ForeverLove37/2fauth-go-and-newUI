@@ -17,7 +17,8 @@ func (s *Server) apiUserPayload(u *store.User) map[string]any {
 		"name":                   u.Name,
 		"email":                  u.Email,
 		"oauth_provider":         nullableString(u.OauthProvider),
-		"authenticated_by_proxy": s.cfg.AuthenticationGuard == "reverse-proxy-guard",
+		"authenticated_by_proxy": s.cfg.AuthenticationGuard == guardReverseProxy,
+		"email_verified":         u.EmailVerifiedAt != nil,
 		"preferences":            s.st.PreferencesWithDefaults(u),
 		"appSettings":            s.settings.ForRegularUser(),
 		"is_admin":               u.IsAdmin,
@@ -31,7 +32,7 @@ func (s *Server) apiUser(c *ctx) {
 
 // updateUser handles PUT /user.
 func (s *Server) updateUser(c *ctx) {
-	if s.cfg.AuthenticationGuard == "reverse-proxy-guard" || c.user.OauthProvider != "" {
+	if s.cfg.AuthenticationGuard == guardReverseProxy || c.user.OauthProvider != "" {
 		jsonMessage(c.w, http.StatusBadRequest, "This account is managed by an external provider and cannot be modified")
 		return
 	}
@@ -61,11 +62,14 @@ func (s *Server) updateUser(c *ctx) {
 		return
 	}
 
+	emailChanged := false
 	if !s.cfg.IsDemoApp {
-		if err := s.st.UpdateUsernameEmail(c.user.ID, name, email); err != nil {
+		changed, err := s.st.UpdateUsernameEmail(c.user.ID, name, email)
+		if err != nil {
 			jsonMessage(c.w, http.StatusInternalServerError, "server error")
 			return
 		}
+		emailChanged = changed
 	}
 	updated, err := s.st.GetUser(c.user.ID)
 	if err != nil {
@@ -73,18 +77,17 @@ func (s *Server) updateUser(c *ctx) {
 		return
 	}
 	c.user = updated
+	if emailChanged {
+		s.sendVerificationMail(updated)
+	}
 	jsonData(c.w, http.StatusOK, s.apiUserPayload(updated))
 }
 
 // deleteUser handles DELETE /user.
 func (s *Server) deleteUser(c *ctx) {
 	v := newValidator(c)
-	password := v.required("password")
-	if v.respond() {
-		return
-	}
-	if !crypt.CheckPassword(c.user.Password, password) {
-		jsonMessage(c.w, http.StatusBadRequest, "The current password does not match")
+	password := v.optional("password")
+	if !s.confirmIdentity(c, password) {
 		return
 	}
 	if c.user.IsAdmin {
@@ -112,9 +115,7 @@ func (s *Server) updatePassword(c *ctx) {
 	current := v.required("currentPassword")
 	password := v.required("password")
 	v.confirmed("password", password)
-	if len(password) > 0 && len(password) < 8 {
-		v.fail("password", "The password field must be at least 8 characters.")
-	}
+	v.password("password", password)
 	if v.respond() {
 		return
 	}
@@ -135,7 +136,39 @@ func (s *Server) updatePassword(c *ctx) {
 		jsonMessage(c.w, http.StatusInternalServerError, "server error")
 		return
 	}
+	s.revokeCredentials(c.user.ID, c.session.SID)
+	s.notifyPasswordChanged(c, c.user)
 	jsonMessage(c.w, http.StatusOK, "Password successfully changed")
+}
+
+// reauthWindow is how recent a sign-in must be to replace a password confirmation,
+// for accounts managed by an identity provider that have no usable password.
+const reauthWindow = 15 * time.Minute
+
+// confirmIdentity checks the password confirmation of a sensitive action. An account
+// that signs in through a provider has no password it knows: it must have signed in
+// recently instead. On failure the response has already been written.
+func (s *Server) confirmIdentity(c *ctx, password string) bool {
+	if password != "" && crypt.CheckPassword(c.user.Password, password) {
+		return true
+	}
+	if c.user.OauthProvider != "" || s.hasOAuthIdentity(c.user.ID) {
+		if c.session != nil && c.session.SID != "" && password == "" {
+			row, err := s.st.GetSession(c.session.SID)
+			if err == nil && time.Since(time.Unix(row.CreatedAt, 0)) <= reauthWindow {
+				return true
+			}
+			jsonMessage(c.w, http.StatusForbidden, "Sign in again to confirm this action")
+			return false
+		}
+	}
+	jsonMessage(c.w, http.StatusBadRequest, "The current password does not match")
+	return false
+}
+
+func (s *Server) hasOAuthIdentity(userID int64) bool {
+	identities, err := s.st.FindOAuthIdentitiesByUser(userID)
+	return err == nil && len(identities) > 0
 }
 
 // allPreferences handles GET /api/v1/user/preferences.
@@ -287,9 +320,7 @@ func (s *Server) storeUser(c *ctx) {
 	v.maxLen("email", email, 191)
 	v.email("email", email)
 	password := v.required("password")
-	if len(password) > 0 && len(password) < 8 {
-		v.fail("password", "The password field must be at least 8 characters.")
-	}
+	v.password("password", password)
 	isAdmin, _ := v.boolean("is_admin")
 	if v.has("name") {
 		if _, err := s.st.GetUserByName(name); err == nil {
@@ -358,6 +389,7 @@ func (s *Server) resetUserPassword(c *ctx) {
 		jsonMessage(c.w, http.StatusInternalServerError, "server error")
 		return
 	}
+	s.revokeCredentials(u.ID, "")
 	jsonResponse(c.w, http.StatusOK, map[string]any{"password": newPassword})
 }
 

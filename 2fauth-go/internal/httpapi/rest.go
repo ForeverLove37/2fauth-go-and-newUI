@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,10 +18,17 @@ import (
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/qrcode"
 
+	"2fauth/internal/mail"
 	"2fauth/internal/otp"
 	"2fauth/internal/services"
 	"2fauth/internal/store"
 )
+
+// maxQRDimension bounds the width and height of a decoded QR code image.
+const maxQRDimension = 6000
+
+// maxIconsPerUser bounds the icons one user can keep on the server.
+const maxIconsPerUser = 2000
 
 // decodeUploadedQR decodes an uploaded QR code image into its text payload.
 func decodeUploadedQR(r *http.Request) (string, error) {
@@ -28,7 +36,16 @@ func decodeUploadedQR(r *http.Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	img, _, err := image.Decode(strings.NewReader(string(data)))
+	// The size in the header is checked first: a small file can claim to decode
+	// into gigabytes of pixels.
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	if config.Width > maxQRDimension || config.Height > maxQRDimension {
+		return "", errors.New("qrcode image too large")
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return "", err
 	}
@@ -71,6 +88,7 @@ func (s *Server) iconFetch(c *ctx) {
 		// reported as a miss by the service.
 		jsonMessage(c.w, http.StatusInternalServerError, "server error")
 	default:
+		_ = s.st.AddIconUpload(res.Name, c.user.ID)
 		jsonResponse(c.w, http.StatusOK, map[string]any{
 			"icon":     res.Name,
 			"url":      s.baseURL() + "/storage/icons/" + res.Name,
@@ -229,24 +247,29 @@ func (s *Server) iconProvidersPayload() map[string]any {
 	}
 }
 
-// iconUpload handles POST /api/v1/icons.
+// iconUpload handles POST /api/v1/icons. The file name only tells what the client
+// believes: the type comes from the content, which must really be an image.
 func (s *Server) iconUpload(c *ctx) {
-	data, filename, err := uploadedFile(c.r, "icon")
-	if err != nil {
-		jsonMessage(c.w, http.StatusInternalServerError, "file_upload_failed")
+	if s.st.CountIconUploads(c.user.ID) >= maxIconsPerUser {
+		jsonMessage(c.w, http.StatusUnprocessableEntity, "You have reached the maximum number of icons")
 		return
 	}
-	ext := "png"
-	if idx := strings.LastIndex(filename, "."); idx >= 0 {
-		ext = strings.ToLower(filename[idx+1:])
+	data, _, err := uploadedFile(c.r, "icon")
+	if err != nil {
+		jsonMessage(c.w, http.StatusUnprocessableEntity, "file_upload_failed")
+		return
 	}
-	if !allowedIconExtension(ext) {
+	name, err := s.icons.StoreUpload(data)
+	if errors.Is(err, services.ErrUnsupportedIcon) {
 		jsonMessage(c.w, http.StatusUnprocessableEntity, "The icon must be a file of type: jpg, jpeg, png, webp, gif, svg")
 		return
 	}
-	name, err := s.icons.StoreWithExtension(ext, data)
 	if err != nil {
-		jsonMessage(c.w, http.StatusInternalServerError, "server error")
+		s.srvError(c, err)
+		return
+	}
+	if err := s.st.AddIconUpload(name, c.user.ID); err != nil {
+		s.srvError(c, err)
 		return
 	}
 	jsonResponse(c.w, http.StatusOK, map[string]any{
@@ -255,24 +278,29 @@ func (s *Server) iconUpload(c *ctx) {
 	})
 }
 
-func allowedIconExtension(ext string) bool {
-	switch ext {
-	case "png", "jpg", "jpeg", "webp", "gif", "svg":
-		return true
-	}
-	return false
-}
-
-// iconDelete handles DELETE /api/v1/icons/{icon}.
+// iconDelete handles DELETE /api/v1/icons/{icon}. Icons are named after their content,
+// so several users can share a file: it only disappears when nobody else needs it.
 func (s *Server) iconDelete(c *ctx) {
-	name := strings.TrimPrefix(c.r.URL.Path, s.baseURL())
-	name = name[strings.LastIndex(name, "/")+1:]
-	if name == "" {
+	name := c.param("icon")
+	if !services.ValidIconName(name) {
 		jsonMessage(c.w, http.StatusNotFound, "not found")
 		return
 	}
+	if !s.icons.Exists(name) {
+		jsonMessage(c.w, http.StatusOK, "icon deleted")
+		return
+	}
+	if !c.user.IsAdmin && !s.st.IconUploadedBy(name, c.user.ID) && !s.st.IconUsedBy(name, c.user.ID) {
+		jsonMessage(c.w, http.StatusForbidden, "Forbidden")
+		return
+	}
+	_ = s.st.RemoveIconUpload(name, c.user.ID)
+	if s.st.IconUsedByOthers(name, c.user.ID) {
+		jsonMessage(c.w, http.StatusOK, "icon deleted")
+		return
+	}
 	if err := s.icons.Delete(name); err != nil {
-		jsonMessage(c.w, http.StatusInternalServerError, "server error")
+		s.srvError(c, err)
 		return
 	}
 	jsonMessage(c.w, http.StatusOK, "icon deleted")
@@ -476,7 +504,7 @@ func (s *Server) listSettings(c *ctx) {
 	for _, key := range s.settings.Keys() {
 		// The OpenID Connect settings (including the client secret) are exposed
 		// through /api/v1/sso/settings only.
-		if isSSOSettingKey(key) {
+		if isProtectedSettingKey(key) {
 			continue
 		}
 		out = append(out, map[string]any{"key": key, "value": s.settings.Get(key)})
@@ -492,9 +520,8 @@ func (s *Server) showSetting(c *ctx) {
 		jsonMessage(c.w, http.StatusNotFound, "not found")
 		return
 	}
-	if isSSOSettingKey(name) {
-		// The SSO configuration is served by /api/v1/sso/settings, which never
-		// returns the (encrypted) client secret.
+	if isProtectedSettingKey(name) {
+		// These namespaces have their own endpoints, which never return a secret.
 		jsonMessage(c.w, http.StatusNotFound, "not found")
 		return
 	}
@@ -540,8 +567,19 @@ func (s *Server) updateSetting(c *ctx) {
 		})
 		return
 	}
+	if isProtectedSettingKey(name) {
+		jsonMessage(c.w, http.StatusNotFound, "not found")
+		return
+	}
+	// Secrets are always encrypted at rest: this flag is kept for the upstream UI.
+	if name == "useEncryption" {
+		jsonResponse(c.w, http.StatusOK, map[string]any{"key": name, "value": true})
+		return
+	}
 	if name == "restrictList" {
-		for _, entry := range strings.Split(toString(value), "\n") {
+		for _, entry := range strings.FieldsFunc(toString(value), func(r rune) bool {
+			return r == '\n' || r == '\r' || r == '|' || r == ','
+		}) {
 			entry = strings.TrimSpace(entry)
 			if entry != "" && !strings.Contains(entry, "@") {
 				jsonResponse(c.w, http.StatusUnprocessableEntity, map[string]any{
@@ -562,6 +600,10 @@ func (s *Server) updateSetting(c *ctx) {
 // deleteSetting handles DELETE /api/v1/settings/{settingName}.
 func (s *Server) deleteSetting(c *ctx) {
 	name := c.param("settingName")
+	if isProtectedSettingKey(name) {
+		jsonMessage(c.w, http.StatusNotFound, "not found")
+		return
+	}
 	if !s.settings.Exists(name) || s.settings.Get(name) == nil {
 		jsonMessage(c.w, http.StatusNotFound, "not found")
 		return
@@ -616,7 +658,7 @@ func (s *Server) systemInfos(c *ctx) {
 		"interface":        "go",
 		"Auth guard":       s.cfg.AuthenticationGuard,
 	}
-	if s.cfg.AuthenticationGuard == "reverse-proxy-guard" {
+	if s.cfg.AuthenticationGuard == guardReverseProxy {
 		common["Auth proxy logout url"] = s.cfg.ProxyLogoutURL
 		common["Auth proxy header for user"] = s.cfg.AuthProxyHeaderForUser
 		common["Auth proxy header for email"] = s.cfg.AuthProxyHeaderForMail
@@ -635,18 +677,6 @@ func (s *Server) systemLatestRelease(c *ctx) {
 		_ = s.settings.Set("lastRadarScan", timeNowUnix())
 	}
 	jsonResponse(c.w, http.StatusOK, map[string]any{"newRelease": release})
-}
-
-// systemTestEmail handles POST /system/test-email.
-func (s *Server) systemTestEmail(c *ctx) {
-	if s.cfg.MailMailer == "" || s.cfg.MailMailer == "log" {
-		jsonResponse(c.w, 424, map[string]any{
-			"message": "Failed to send the test email",
-			"details": "no mail transport configured (MAIL_MAILER=log)",
-		})
-		return
-	}
-	jsonMessage(c.w, http.StatusOK, "Ok")
 }
 
 // systemOptimize handles GET /system/optimize.
@@ -814,6 +844,7 @@ func (s *Server) createShares(c *ctx) {
 		}
 		if wasCreated {
 			created++
+			s.notifyAccountEvent(mail.KindAccountShared, "notifyOnShare", c.user, u, a)
 		}
 		shared = append(shared, u)
 	}
@@ -864,9 +895,9 @@ func (s *Server) deleteAllShares(c *ctx) {
 		return
 	}
 	_ = s.st.RemoveAllShares(a.ID)
-	if s.settings.Bool("enableAllUsersSharingScope") {
-		_ = s.st.RemoveShareWithAll(a.ID)
-	}
+	// Whatever the current setting: a stale row would expose the account again the
+	// day the all-users scope is turned back on.
+	_ = s.st.RemoveShareWithAll(a.ID)
 	jsonNoContent(c.w)
 }
 
@@ -877,6 +908,10 @@ func (s *Server) shareWithAll(c *ctx) {
 		return
 	}
 	if _, ok := s.shareState(c, a); !ok {
+		return
+	}
+	if !s.settings.Bool("enableAllUsersSharingScope") {
+		jsonMessage(c.w, http.StatusForbidden, "Sharing with all users is disabled")
 		return
 	}
 	_ = s.st.RemoveAllShares(a.ID)
@@ -894,6 +929,10 @@ func (s *Server) shareWithAll(c *ctx) {
 func (s *Server) shareRecipients(c *ctx) {
 	a, ok := s.lookupAccount(c, true)
 	if !ok {
+		return
+	}
+	// Without sharing there is no reason to browse the other users.
+	if _, ok := s.shareState(c, a); !ok {
 		return
 	}
 	filter := c.query("filter[nameOrEmail]")

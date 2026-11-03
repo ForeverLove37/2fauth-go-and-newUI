@@ -1,19 +1,33 @@
 package httpapi
 
 import (
+	"crypto/subtle"
+	"encoding/json"
+	"log/slog"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"2fauth/internal/crypt"
+	"2fauth/internal/mail"
 	"2fauth/internal/store"
+)
+
+const (
+	// guardReverseProxy delegates authentication to a trusted reverse proxy.
+	guardReverseProxy = "reverse-proxy-guard"
+	// registerThrottle bounds the slow anonymous requests, per address and minute.
+	registerThrottle = 10
 )
 
 // authenticatedPayload mirrors HasAuthenticatedPayload::authenticatedPayload().
 func (s *Server) authenticatedPayload(c *ctx, message string, u *store.User) map[string]any {
 	return map[string]any{
 		"message":        message,
+		"email_verified": u.EmailVerifiedAt != nil,
 		"id":             u.ID,
 		"name":           u.Name,
 		"email":          u.Email,
@@ -33,8 +47,24 @@ func nullableString(v string) any {
 
 // register handles POST /user.
 func (s *Server) register(c *ctx) {
-	if s.settings.Bool("disableRegistration") {
+	if s.cfg.AuthenticationGuard == guardReverseProxy {
+		jsonMessage(c.w, http.StatusForbidden, "Accounts are managed by the reverse proxy")
+		return
+	}
+	// The very first account must always be possible, whatever the settings say.
+	count, err := s.st.CountUsers()
+	if err != nil {
+		s.srvError(c, err)
+		return
+	}
+	if count > 0 && (s.settings.Bool("disableRegistration") || s.ssoOnly()) {
 		jsonMessage(c.w, http.StatusForbidden, "forbidden")
+		return
+	}
+	// Hashing is deliberately slow: without a limit this endpoint is a CPU sink.
+	if ok, retry := s.throttle.Allow("register|"+s.clientIP(c.r), registerThrottle, time.Minute); !ok {
+		jsonMessage(c.w, http.StatusTooManyRequests,
+			"Too many attempts. Please try again in "+strconv.Itoa(retry)+" seconds.")
 		return
 	}
 
@@ -46,9 +76,7 @@ func (s *Server) register(c *ctx) {
 	v.email("email", email)
 	password := v.required("password")
 	v.confirmed("password", password)
-	if len(password) > 0 && len(password) < 8 {
-		v.fail("password", "The password field must be at least 8 characters.")
-	}
+	v.password("password", password)
 	if v.has("name") {
 		if _, err := s.st.GetUserByName(name); err == nil {
 			v.fail("name", "The name has already been taken.")
@@ -63,9 +91,11 @@ func (s *Server) register(c *ctx) {
 		return
 	}
 
-	if message, blocked := s.registrationBlocked(email); blocked {
-		jsonMessage(c.w, http.StatusUnprocessableEntity, message)
-		return
+	if count > 0 {
+		if message, blocked := s.registrationBlocked(email); blocked {
+			jsonMessage(c.w, http.StatusUnprocessableEntity, message)
+			return
+		}
 	}
 
 	hash, err := crypt.HashPassword(password)
@@ -79,42 +109,81 @@ func (s *Server) register(c *ctx) {
 		return
 	}
 
-	c.session.UserID = user.ID
-	c.session.regenerate()
-	_ = s.st.CreateAuthLog(user.ID, clientIP(c.r), c.r.UserAgent(), "web-guard", "register", true)
+	if err := s.signIn(c, user); err != nil {
+		s.srvError(c, err)
+		return
+	}
+	_ = s.st.CreateAuthLog(user.ID, s.clientIP(c.r), c.r.UserAgent(), "web-guard", "register", true)
+	s.sendVerificationMail(user)
 
 	jsonResponse(c.w, http.StatusCreated, s.authenticatedPayload(c, "account created", user))
 }
 
-// registrationBlocked applies the restrictRegistration policy.
+// registrationBlocked applies the restrictRegistration policy. The policy fails
+// closed: once it is on, an address is refused unless the configuration positively
+// accepts it.
+//
+//	restrictList  addresses, or "@domain" entries, separated by a line break, "|" or ","
+//	restrictRule  "allow" or empty: the list is an allow list
+//	              "deny": the list is a block list
+//	              anything else: a regular expression the address may also match
 func (s *Server) registrationBlocked(email string) (string, bool) {
 	if !s.settings.Bool("restrictRegistration") {
 		return "", false
 	}
-	rule := s.settings.Str("restrictRule")
-	if rule == "" {
+	const refused = "Registration is not allowed for this email address"
+	lowered := strings.ToLower(strings.TrimSpace(email))
+	listed := false
+	for _, entry := range strings.FieldsFunc(strings.ToLower(s.settings.Str("restrictList")), func(r rune) bool {
+		return r == '\n' || r == '\r' || r == '|' || r == ','
+	}) {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if entry == lowered || (strings.HasPrefix(entry, "@") && strings.HasSuffix(lowered, entry)) {
+			listed = true
+			break
+		}
+	}
+	rule := strings.TrimSpace(s.settings.Str("restrictRule"))
+	switch strings.ToLower(rule) {
+	case "", "allow":
+		if listed {
+			return "", false
+		}
+		return refused, true
+	case "deny":
+		if listed {
+			return refused, true
+		}
 		return "", false
 	}
-	list := strings.Split(strings.ToLower(s.settings.Str("restrictList")), "\n")
-	lowered := strings.ToLower(strings.TrimSpace(email))
-	if rule == "allow" {
-		for _, entry := range list {
-			if entry = strings.TrimSpace(entry); entry != "" && entry == lowered {
-				return "", false
-			}
-		}
-		return "Registration is not allowed for this email address", true
+	if listed {
+		return "", false
 	}
-	for _, entry := range list {
-		if entry = strings.TrimSpace(entry); entry != "" && entry == lowered {
-			return "Registration is not allowed for this email address", true
-		}
+	pattern, err := regexp.Compile(rule)
+	if err != nil {
+		slog.Warn("restrictRule is not a valid regular expression: registrations are refused", "error", err)
+		return refused, true
 	}
-	return "", false
+	if pattern.MatchString(lowered) {
+		return "", false
+	}
+	return refused, true
+}
+
+// ssoOnly reports whether password sign-in is reserved to administrators.
+func (s *Server) ssoOnly() bool {
+	return s.settings.Bool("enableSso") && s.settings.Bool("useSsoOnly")
 }
 
 // login handles POST /user/login.
 func (s *Server) login(c *ctx) {
+	if s.cfg.AuthenticationGuard == guardReverseProxy {
+		jsonMessage(c.w, http.StatusForbidden, "Sign in through the reverse proxy")
+		return
+	}
 	v := newValidator(c)
 	email := v.required("email")
 	v.email("email", email)
@@ -123,40 +192,69 @@ func (s *Server) login(c *ctx) {
 		return
 	}
 
-	key := clientIP(c.r) + "|" + strings.ToLower(email)
-	window := time.Minute
-	if ok, retry := s.throttle.Allow(key, s.cfg.LoginThrottle, window); !ok {
-		jsonMessage(c.w, http.StatusTooManyRequests,
-			"Too many login attempts. Please try again in "+strconv.Itoa(retry)+" seconds.")
-		return
+	// Three independent budgets: one address guessing one account, one address
+	// spraying many accounts, and many addresses guessing one account.
+	ip := s.clientIP(c.r)
+	lowered := strings.ToLower(email)
+	pairKey := ip + "|" + lowered
+	limit := s.cfg.LoginThrottle
+	for _, budget := range []struct {
+		key string
+		max int
+	}{{pairKey, limit}, {"ip|" + ip, limit * 6}, {"email|" + lowered, limit * 6}} {
+		if ok, retry := s.throttle.Allow(budget.key, budget.max, time.Minute); !ok {
+			jsonMessage(c.w, http.StatusTooManyRequests,
+				"Too many login attempts. Please try again in "+strconv.Itoa(retry)+" seconds.")
+			return
+		}
 	}
 
 	user, err := s.st.GetUserByEmail(email)
-	if err != nil || !crypt.CheckPassword(user.Password, password) {
-		if user != nil {
-			_ = s.st.CreateAuthLog(user.ID, clientIP(c.r), c.r.UserAgent(), "web-guard", "password", false)
-		}
+	if err != nil {
+		// Same cost as a wrong password, so timing does not reveal the address.
+		crypt.BurnPasswordCheck(password)
 		writeUnauthorized(c.w)
 		return
 	}
+	if !crypt.CheckPassword(user.Password, password) {
+		_ = s.st.CreateAuthLog(user.ID, ip, c.r.UserAgent(), "web-guard", "password", false)
+		s.notifyFailedLogin(c, user)
+		writeUnauthorized(c.w)
+		return
+	}
+	// Administrators keep the password as a way back in when the provider is down.
+	if s.ssoOnly() && !user.IsAdmin {
+		jsonMessage(c.w, http.StatusForbidden, "Single sign-on is required on this instance")
+		return
+	}
 
-	s.throttle.Clear(key)
-	c.session.UserID = user.ID
-	c.session.regenerate()
+	s.throttle.Clear(pairKey)
+	if err := s.signIn(c, user); err != nil {
+		s.srvError(c, err)
+		return
+	}
 	s.st.TouchLastSeen(user.ID)
-	_ = s.st.CreateAuthLog(user.ID, clientIP(c.r), c.r.UserAgent(), "web-guard", "password", true)
+	s.notifyNewDevice(c, user, "password")
+	_ = s.st.CreateAuthLog(user.ID, ip, c.r.UserAgent(), "web-guard", "password", true)
 
 	jsonResponse(c.w, http.StatusOK, s.authenticatedPayload(c, "authenticated", user))
 }
 
-// logout handles GET /user/logout.
+// logout handles GET and POST /user/logout. The GET form is what the upstream SPA
+// calls: it must prove it comes from the application, like any unsafe request.
 func (s *Server) logout(c *ctx) {
 	if c.user == nil {
 		writeUnauthorized(c.w)
 		return
 	}
-	userID := c.user.ID
-	s.st.CloseAuthLog(userID)
+	if !c.viaToken && !s.csrfValid(c.r, c.session) {
+		jsonResponse(c.w, statusCSRFMismatch, map[string]any{"message": "CSRF token mismatch."})
+		return
+	}
+	s.st.CloseAuthLog(c.user.ID)
+	if c.session.SID != "" {
+		_ = s.st.DeleteSession(c.session.SID)
+	}
 	c.session = newSession()
 	jsonMessage(c.w, http.StatusOK, "signed out")
 }
@@ -198,7 +296,11 @@ func (s *Server) healthPage(c *ctx) {
 <body><main><h1>2FAuth is up</h1><p>The application answered this health check correctly.</p></main></body></html>`))
 }
 
-// passwordLost handles POST /user/password/lost.
+// passwordResetTTL is how long a reset link stays valid.
+const passwordResetTTL = 60 * time.Minute
+
+// passwordLost handles POST /user/password/lost. The answer and its timing do not
+// depend on the address: the lookup and the delivery happen in the background.
 func (s *Server) passwordLost(c *ctx) {
 	v := newValidator(c)
 	email := v.required("email")
@@ -206,17 +308,178 @@ func (s *Server) passwordLost(c *ctx) {
 	if v.respond() {
 		return
 	}
-	// Anti-enumeration: always answer the same way.
+	if ok, retry := s.throttle.Allow("lost|"+s.clientIP(c.r), registerThrottle, time.Minute); !ok {
+		jsonMessage(c.w, http.StatusTooManyRequests,
+			"Too many attempts. Please try again in "+strconv.Itoa(retry)+" seconds.")
+		return
+	}
+	// One mail per address per quarter of an hour: the form must not be a way to
+	// flood somebody's mailbox.
+	if ok, _ := s.throttle.Allow("lost-mail|"+strings.ToLower(email), 3, 15*time.Minute); ok {
+		s.runMailJob(func() { s.sendPasswordReset(email) })
+	}
 	jsonResponse(c.w, http.StatusOK, map[string]any{
 		"message": "We have emailed your password reset link.",
 	})
 }
 
+// sendPasswordReset issues a reset token and mails the link.
+func (s *Server) sendPasswordReset(email string) {
+	if !s.mailSettings().Enabled() {
+		return
+	}
+	user, err := s.st.GetUserByEmail(email)
+	if err != nil || user.OauthProvider != "" {
+		return
+	}
+	token := crypt.RandomString(64)
+	if err := s.st.SavePasswordReset(user.Email, crypt.SHA256Hex(token)); err != nil {
+		slog.Error("cannot store a password reset", "error", err)
+		return
+	}
+	link := s.publicURL("/password/reset") + "?" + url.Values{"token": {token}, "email": {user.Email}}.Encode()
+	s.deliver(mail.KindResetPassword, user, map[string]string{
+		"Email":          user.Email,
+		"ResetURL":       link,
+		"ExpiresMinutes": strconv.Itoa(int(passwordResetTTL.Minutes())),
+	})
+}
+
 // passwordReset handles POST /user/password/reset.
 func (s *Server) passwordReset(c *ctx) {
+	v := newValidator(c)
+	email := v.required("email")
+	v.email("email", email)
+	token := v.required("token")
+	password := v.required("password")
+	v.confirmed("password", password)
+	v.password("password", password)
+	if v.respond() {
+		return
+	}
+	if ok, retry := s.throttle.Allow("reset|"+s.clientIP(c.r), s.cfg.LoginThrottle, time.Minute); !ok {
+		jsonMessage(c.w, http.StatusTooManyRequests,
+			"Too many attempts. Please try again in "+strconv.Itoa(retry)+" seconds.")
+		return
+	}
+	invalid := func() {
+		v.fail("email", "This password reset token is invalid.")
+		v.respond()
+	}
+	user, err := s.st.GetUserByEmail(email)
+	if err != nil {
+		crypt.BurnPasswordCheck(password)
+		invalid()
+		return
+	}
+	stored, age, err := s.st.FindPasswordReset(user.Email)
+	if err != nil || age > passwordResetTTL ||
+		subtle.ConstantTimeCompare([]byte(stored), []byte(crypt.SHA256Hex(token))) != 1 {
+		invalid()
+		return
+	}
+	hash, err := crypt.HashPassword(password)
+	if err != nil {
+		s.srvError(c, err)
+		return
+	}
+	if err := s.st.UpdatePassword(user.ID, hash); err != nil {
+		s.srvError(c, err)
+		return
+	}
+	_ = s.st.DeletePasswordReset(user.Email)
+	// Following the link proved control of the mailbox.
+	_ = s.st.MarkEmailVerified(user.ID)
+	s.revokeCredentials(user.ID, "")
+	s.notifyPasswordChanged(c, user)
 	jsonResponse(c.w, http.StatusOK, map[string]any{
 		"message": "Your password has been reset.",
 	})
+}
+
+// revokeCredentials ends the sessions (but keep) and the personal access tokens of
+// a user. Whoever used the previous password must not stay signed in.
+func (s *Server) revokeCredentials(userID int64, keep string) {
+	if err := s.st.DeleteUserSessions(userID, keep); err != nil {
+		slog.Error("cannot end the sessions of a user", "error", err)
+	}
+	if err := s.st.RevokeAllTokens(userID); err != nil {
+		slog.Error("cannot revoke the tokens of a user", "error", err)
+	}
+}
+
+// emailToken is the content of an e-mail verification link.
+type emailToken struct {
+	Purpose string `json:"purpose"`
+	UserID  int64  `json:"uid"`
+	Email   string `json:"email"`
+	Expires int64  `json:"exp"`
+}
+
+const (
+	emailTokenPurpose = "email-verify"
+	emailTokenTTL     = 24 * time.Hour
+)
+
+// sendVerificationMail mails a confirmation link for the address of the user.
+func (s *Server) sendVerificationMail(user *store.User) {
+	if user.EmailVerifiedAt != nil || !s.mailSettings().Enabled() {
+		return
+	}
+	raw, err := json.Marshal(emailToken{
+		Purpose: emailTokenPurpose,
+		UserID:  user.ID,
+		Email:   user.Email,
+		Expires: time.Now().Add(emailTokenTTL).Unix(),
+	})
+	if err != nil {
+		return
+	}
+	token, err := s.enc.EncryptString(string(raw))
+	if err != nil {
+		return
+	}
+	s.sendAsync(mail.KindVerifyEmail, user, map[string]string{
+		"Email":        user.Email,
+		"VerifyURL":    s.publicURL("/user/email/verify") + "?" + url.Values{"token": {token}}.Encode(),
+		"ExpiresHours": strconv.Itoa(int(emailTokenTTL.Hours())),
+	})
+}
+
+// sendEmailVerification handles POST /user/email/verification.
+func (s *Server) sendEmailVerification(c *ctx) {
+	if c.user.EmailVerifiedAt != nil {
+		jsonMessage(c.w, http.StatusOK, "This address is already verified")
+		return
+	}
+	if !s.mailSettings().Enabled() {
+		jsonMessage(c.w, http.StatusUnprocessableEntity, "E-mail delivery is not configured")
+		return
+	}
+	if ok, retry := s.throttle.Allow("verify-mail|"+strconv.FormatInt(c.user.ID, 10), 3, 15*time.Minute); !ok {
+		jsonMessage(c.w, http.StatusTooManyRequests,
+			"Too many attempts. Please try again in "+strconv.Itoa(retry)+" seconds.")
+		return
+	}
+	s.sendVerificationMail(c.user)
+	jsonMessage(c.w, http.StatusOK, "Verification e-mail sent")
+}
+
+// verifyEmail handles GET /user/email/verify, the target of the e-mail link.
+func (s *Server) verifyEmail(c *ctx) {
+	result := "invalid"
+	if plain, err := s.enc.DecryptString(c.query("token")); err == nil {
+		var token emailToken
+		if json.Unmarshal([]byte(plain), &token) == nil && token.Purpose == emailTokenPurpose && time.Now().Unix() < token.Expires {
+			// The address must still be the one the link was sent to.
+			if user, err := s.st.GetUser(token.UserID); err == nil && strings.EqualFold(user.Email, token.Email) {
+				if s.st.MarkEmailVerified(user.ID) == nil {
+					result = "ok"
+				}
+			}
+		}
+	}
+	s.ssoRedirect(c, s.baseURL()+"/settings?tab=account&email_verified="+result)
 }
 
 // listPersonalAccessTokens handles GET /oauth/personal-access-tokens.
@@ -287,35 +550,63 @@ func (s *Server) deletePersonalAccessToken(c *ctx) {
 
 // patAllowed enforces the SSO-only restriction on personal access tokens.
 func (s *Server) patAllowed(c *ctx) bool {
-	appSettings := s.settings
-	if appSettings.Bool("enableSso") && appSettings.Bool("useSsoOnly") && !appSettings.Bool("allowPatWhileSsoOnly") {
+	if !s.patPolicyAllows() {
 		jsonMessage(c.w, http.StatusForbidden, "Personal access tokens are not supported when SSO only is enabled")
 		return false
 	}
-	if s.cfg.AuthenticationGuard == "reverse-proxy-guard" {
+	if s.cfg.AuthenticationGuard == guardReverseProxy {
 		jsonMessage(c.w, http.StatusForbidden, "Personal access tokens are not supported behind a reverse proxy")
 		return false
 	}
 	return true
 }
 
+// patPolicyAllows reports whether personal access tokens are accepted at all: an
+// existing token must not be a way around the SSO-only policy.
+func (s *Server) patPolicyAllows() bool {
+	return !s.ssoOnly() || s.settings.Bool("allowPatWhileSsoOnly")
+}
+
+// userFromProxy resolves the identity asserted by a trusted reverse proxy, creating
+// the account on first use. Headers from any other peer are ignored.
+func (s *Server) userFromProxy(r *http.Request) *store.User {
+	if !s.trustedProxies.Contains(peerAddr(r.RemoteAddr)) {
+		return nil
+	}
+	name := strings.TrimSpace(r.Header.Get(s.cfg.AuthProxyHeaderForUser))
+	if name == "" {
+		return nil
+	}
+	email := ""
+	if s.cfg.AuthProxyHeaderForMail != "" {
+		email = strings.ToLower(strings.TrimSpace(r.Header.Get(s.cfg.AuthProxyHeaderForMail)))
+	}
+	if email == "" {
+		email = strings.ToLower(name) + "@proxy.invalid"
+	}
+	if user, err := s.st.GetUserByEmail(email); err == nil {
+		return user
+	}
+	if user, err := s.st.GetUserByName(name); err == nil {
+		return user
+	}
+	hash, err := crypt.HashPassword(crypt.RandomString(40))
+	if err != nil {
+		return nil
+	}
+	user, err := s.st.CreateUser(name, email, hash)
+	if err != nil {
+		slog.Warn("cannot create the account of a proxied user", "error", err)
+		return nil
+	}
+	_ = s.st.SetOAuthProvider(user.ID, "reverse-proxy", name)
+	return user
+}
+
 // deprecatedUserName handles GET /api/v1/user/name.
 func (s *Server) deprecatedUserName(c *ctx) {
 	c.w.Header().Set("Deprecation", time.Date(2023, 3, 21, 0, 0, 0, 0, time.UTC).Format(http.TimeFormat))
 	jsonResponse(c.w, http.StatusOK, map[string]any{"deprecation": true})
-}
-
-// clientIP returns the caller IP address.
-func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		parts := strings.Split(fwd, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	host := r.RemoteAddr
-	if idx := strings.LastIndex(host, ":"); idx > 0 {
-		host = host[:idx]
-	}
-	return host
 }
 
 // createdAtJSON renders an optional time like Eloquent does.

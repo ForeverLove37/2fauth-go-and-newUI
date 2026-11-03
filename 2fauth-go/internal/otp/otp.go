@@ -42,6 +42,13 @@ const (
 	DefaultCounter = 0
 	// DefaultAlgorithm is the default digest.
 	DefaultAlgorithm = SHA1
+	// MinDigits and MaxDigits bound the length of a code.
+	MinDigits = 5
+	MaxDigits = 10
+	// MaxPeriod bounds the TOTP time step (one week).
+	MaxPeriod = 604800
+	// MaxLabelLength bounds the service and account names.
+	MaxLabelLength = 255
 )
 
 // Errors returned by this package.
@@ -139,9 +146,6 @@ func b32Value(c byte) int {
 		return int(c - 'A')
 	case c >= '2' && c <= '7':
 		return int(c-'2') + 26
-	case c >= '0' && c <= '1':
-		// tolerate typo'd secrets the way forgiving decoders do
-		return int(c-'0') + 26
 	}
 	return -1
 }
@@ -172,12 +176,16 @@ func hotpValue(key []byte, counter uint64, newHash func() hash.Hash) (uint32, er
 		return 0, err
 	}
 	sum := mac.Sum(nil)
-	offset := sum[len(sum)-1] & 0x0f
-	bin := (uint32(sum[offset])&0x7f)<<24 |
-		uint32(sum[offset+1])<<16 |
-		uint32(sum[offset+2])<<8 |
-		uint32(sum[offset+3])
-	return bin, nil
+	offset := int(sum[len(sum)-1] & 0x0f)
+	// RFC 4226 truncation assumes a digest of at least 19 bytes. MD5 only has 16:
+	// bytes past the end count as zero, which is what OTPHP computes for them.
+	at := func(i int) uint32 {
+		if i < len(sum) {
+			return uint32(sum[i])
+		}
+		return 0
+	}
+	return (at(offset)&0x7f)<<24 | at(offset+1)<<16 | at(offset+2)<<8 | at(offset+3), nil
 }
 
 // Code returns the code for the account at the given unix timestamp.
@@ -261,11 +269,15 @@ func steamCode(a Account, ts int64) (string, error) {
 }
 
 func formatCode(bin uint32, digits int) string {
-	mod := uint32(1)
+	if digits > MaxDigits {
+		// Only reachable through rows stored by an older build.
+		digits = MaxDigits
+	}
+	mod := uint64(1)
 	for i := 0; i < digits; i++ {
 		mod *= 10
 	}
-	return fmt.Sprintf("%0*d", digits, bin%mod)
+	return fmt.Sprintf("%0*d", digits, uint64(bin)%mod)
 }
 
 // Period returns the effective TOTP period.
@@ -362,25 +374,21 @@ func ParseURI(uri string) (Account, error) {
 	}
 	if d := q.Get("digits"); d != "" {
 		n, err := strconv.Atoi(d)
-		if err != nil || n < 6 || n > 10 {
-			if err != nil {
-				return acc, ErrInvalidParameter
-			}
+		if err != nil || n < MinDigits || n > MaxDigits {
+			return acc, ErrInvalidParameter
 		}
-		if n > 0 {
-			acc.Digits = n
-		}
+		acc.Digits = n
 	}
 	if p := q.Get("period"); p != "" {
 		n, err := strconv.Atoi(p)
-		if err != nil {
+		if err != nil || n < 1 || n > MaxPeriod {
 			return acc, ErrInvalidParameter
 		}
 		acc.Period = &n
 	}
 	if c := q.Get("counter"); c != "" {
 		n, err := strconv.ParseInt(c, 10, 64)
-		if err != nil {
+		if err != nil || n < 0 {
 			return acc, ErrInvalidParameter
 		}
 		acc.Counter = &n
@@ -405,6 +413,36 @@ func ParseURI(uri string) (Account, error) {
 		acc.Period = &p
 	}
 	return acc, nil
+}
+
+// Validate reports whether the account can actually generate codes. Every path
+// that stores or computes an account (form, URI, import) goes through it, so a bad
+// value is refused up front instead of failing later on every listing.
+func Validate(a Account) error {
+	switch a.Type {
+	case TypeTOTP, TypeHOTP, TypeSteam:
+	default:
+		return ErrInvalidOTPType
+	}
+	if _, err := DecodeBase32(a.Secret); err != nil {
+		return ErrInvalidSecret
+	}
+	if _, err := digest(a.Algorithm); err != nil {
+		return ErrInvalidParameter
+	}
+	if a.Digits != 0 && (a.Digits < MinDigits || a.Digits > MaxDigits) {
+		return ErrInvalidParameter
+	}
+	if a.Period != nil && (*a.Period < 1 || *a.Period > MaxPeriod) {
+		return ErrInvalidParameter
+	}
+	if a.Counter != nil && *a.Counter < 0 {
+		return ErrInvalidParameter
+	}
+	if len([]rune(a.Service)) > MaxLabelLength || len([]rune(a.Account)) > MaxLabelLength {
+		return ErrInvalidParameter
+	}
+	return nil
 }
 
 // BuildURI renders the otpauth:// provisioning URI of an account, mirroring

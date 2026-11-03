@@ -127,10 +127,34 @@ func (s *Store) CreateAuthLog(userID int64, ip, userAgent, guard, method string,
 
 // CloseAuthLog records the logout time of the latest session.
 func (s *Store) CloseAuthLog(userID int64) {
+	// Two statements: MySQL cannot select from the table an UPDATE is modifying.
+	var id int64
+	err := s.DB.QueryRow(`SELECT id FROM auth_logs WHERE authenticatable_id = ? AND login_successful = ? AND logout_at IS NULL
+		ORDER BY login_at DESC LIMIT 1`, userID, true).Scan(&id)
+	if err != nil {
+		return
+	}
 	now := time.Now().UTC().Format(db.TimeLayout)
-	_, _ = s.DB.Exec(`UPDATE auth_logs SET logout_at = ? WHERE id = (
-		SELECT id FROM auth_logs WHERE authenticatable_id = ? AND login_successful = ? AND logout_at IS NULL
-		ORDER BY login_at DESC LIMIT 1)`, now, userID, true)
+	_, _ = s.DB.Exec(`UPDATE auth_logs SET logout_at = ? WHERE id = ?`, now, id)
+}
+
+// SeenDevice reports whether the user already signed in from this address and
+// browser. It must be called before the current sign-in is logged.
+func (s *Store) SeenDevice(userID int64, ip, userAgent string) bool {
+	var n int64
+	err := s.DB.QueryRow(`SELECT COUNT(*) FROM auth_logs WHERE authenticatable_id = ? AND login_successful = ?
+		AND ip_address = ? AND user_agent = ?`, userID, true, ip, userAgent).Scan(&n)
+	return err != nil || n > 0
+}
+
+// CountSuccessfulLogins returns how many times the user signed in.
+func (s *Store) CountSuccessfulLogins(userID int64) int64 {
+	var n int64
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM auth_logs WHERE authenticatable_id = ? AND login_successful = ?`,
+		userID, true).Scan(&n); err != nil {
+		return 0
+	}
+	return n
 }
 
 // ListAuthLogs returns the authentication history of a user.

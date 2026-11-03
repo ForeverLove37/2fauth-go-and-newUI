@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { Component, useMemo, useRef, type ReactNode } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Float, Grid } from '@react-three/drei'
 import * as THREE from 'three'
@@ -14,6 +14,35 @@ interface BackdropProps {
 
 /** Scenery that is pure CSS (no WebGL) so it also works on weak devices. */
 const cssOnly: BackgroundStyle[] = ['aurora', 'minimal']
+
+let webgl: boolean | undefined
+
+/** Whether this browser can create a WebGL context (some hardened or remote ones cannot). */
+function webglAvailable(): boolean {
+  if (webgl === undefined) {
+    try {
+      const context = document.createElement('canvas').getContext('webgl2') ?? document.createElement('canvas').getContext('webgl')
+      webgl = Boolean(context)
+      context?.getExtension('WEBGL_lose_context')?.loseContext()
+    } catch {
+      webgl = false
+    }
+  }
+  return webgl
+}
+
+/** A scenery that fails must only lose the scenery, never unmount the application. */
+class SceneryBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
 
 /** A slowly drifting particle field. */
 function Particles({ count = 520, color, speed = 1 }: { count?: number; color: string; speed?: number }) {
@@ -222,8 +251,11 @@ export default function Backdrop({
   if (cssOnly.includes(style)) {
     return <div className="backdrop" aria-hidden data-style={style} />
   }
+  const plain = <div className="backdrop" aria-hidden data-style="minimal" />
+  if (!webglAvailable()) return plain
 
   return (
+    <SceneryBoundary fallback={plain}>
     <div className="backdrop" aria-hidden data-style={style}>
       <Canvas
         dpr={[1, 2]}
@@ -293,5 +325,6 @@ export default function Backdrop({
         )}
       </Canvas>
     </div>
+    </SceneryBoundary>
   )
 }

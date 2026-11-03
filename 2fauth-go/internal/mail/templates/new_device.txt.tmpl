@@ -1,0 +1,21 @@
+{{define "subject"}}{{if .ZH}}新设备登录了你的 {{.App}} 账户{{else}}New sign-in to your {{.App}} account{{end}}{{end}}
+{{define "preheader"}}{{if .ZH}}{{.V.Time}}，来自 {{.V.IP}}。是你本人的话不需要操作。{{else}}{{.V.Time}}, from {{.V.IP}}. Nothing to do if this was you.{{end}}{{end}}
+{{define "text"}}{{if .ZH}}{{.V.Email}} 刚刚从一个没有记录过的地址或浏览器登录。
+
+时间：{{.V.Time}}
+IP 地址：{{.V.IP}}
+浏览器：{{.V.Browser}}
+系统：{{.V.Platform}}
+登录方式：{{if eq .V.Method "password"}}密码{{else}}单点登录{{end}}
+
+是你本人的话，不需要做任何操作。如果不是，请立即修改密码，这会让所有其他设备退出登录：
+{{.V.SecurityURL}}{{else}}{{.V.Email}} just signed in from an address or browser we haven't seen before.
+
+Time: {{.V.Time}}
+IP address: {{.V.IP}}
+Browser: {{.V.Browser}}
+System: {{.V.Platform}}
+Method: {{if eq .V.Method "password"}}password{{else}}single sign-on{{end}}
+
+If this was you, there is nothing to do. If it wasn't, change your password now, this signs out every other device:
+{{.V.SecurityURL}}{{end}}{{end}}

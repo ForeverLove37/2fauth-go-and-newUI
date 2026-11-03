@@ -1,0 +1,7 @@
+.git
+**/node_modules
+2fauth-ui/dist
+2fauth-go/2fauth
+run
+**/.env
+**/*.sqlite*

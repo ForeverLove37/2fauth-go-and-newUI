@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"html/template"
 	"mime"
 	"net/http"
 	"os"
@@ -19,6 +20,9 @@ type uiAssets struct {
 func loadUI(dir string) *uiAssets {
 	if dir == "" {
 		return nil
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
 	}
 	if _, err := os.Stat(filepath.Join(dir, "index.html")); err != nil {
 		return nil
@@ -39,7 +43,20 @@ func (s *Server) serveUI(c *ctx) {
 	}
 	c.w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	c.w.Header().Set("Cache-Control", "no-cache")
-	_, _ = c.w.Write(body)
+	_, _ = c.w.Write(s.mountUI(body))
+}
+
+// mountUI adapts the bundle, built with relative URLs, to where the application is
+// mounted: client side routes can be several levels deep, and the panel reads its
+// base from the meta tag to reach the API and to route.
+func (s *Server) mountUI(page []byte) []byte {
+	base := s.baseURL()
+	html := string(page)
+	for _, attr := range []string{`src="./`, `href="./`} {
+		html = strings.ReplaceAll(html, attr, strings.TrimSuffix(attr, "./")+base+"/")
+	}
+	meta := `<meta name="2fauth-base" content="` + template.HTMLEscapeString(base) + `" />`
+	return []byte(strings.Replace(html, "<head>", "<head>\n    "+meta, 1))
 }
 
 // serveUIAsset serves a hashed bundle of the panel.
@@ -56,10 +73,6 @@ func (s *Server) serveUIAsset(c *ctx) {
 		return
 	}
 	file := filepath.Join(s.ui.dir, "assets", filepath.FromSlash(clean))
-	if !strings.HasPrefix(file, s.ui.dir) {
-		http.NotFound(c.w, c.r)
-		return
-	}
 	if info, err := os.Stat(file); err != nil || info.IsDir() {
 		http.NotFound(c.w, c.r)
 		return
@@ -104,6 +117,7 @@ func (s *Server) serveFrontend(c *ctx, reqPath string) {
 // the same values through the landing page globals).
 func (s *Server) frontendConfig(c *ctx) {
 	jsonResponse(c.w, http.StatusOK, map[string]any{
+		"mailEnabled":  s.mailSettings().Enabled(),
 		"appName":      s.cfg.AppName,
 		"appVersion":   s.cfg.Version,
 		"subdirectory": s.cfg.Subdirectory,

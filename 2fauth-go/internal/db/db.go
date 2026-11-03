@@ -32,6 +32,11 @@ func Open(dialect, dsn string) (*DB, error) {
 	default:
 		return nil, fmt.Errorf("unsupported database connection %q", dialect)
 	}
+	if dialect == "sqlite" && !strings.Contains(dsn, "?") {
+		// Foreign keys and the busy timeout are per-connection pragmas: without them
+		// the ON DELETE CASCADE rules below silently do nothing.
+		dsn += "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+	}
 	conn, err := sql.Open(driver, dsn)
 	if err != nil {
 		return nil, err
@@ -43,8 +48,13 @@ func Open(dialect, dsn string) (*DB, error) {
 	return &DB{DB: conn, Dialect: dialect}, nil
 }
 
-// Rebind rewrites `?` placeholders to the dialect specific form.
+// Rebind rewrites a query for the dialect. Queries are written with `?`
+// placeholders and ANSI "quoted" identifiers (key and groups are reserved words
+// in MySQL): PostgreSQL gets $n placeholders, MySQL gets backticks.
 func (d *DB) Rebind(query string) string {
+	if d.Dialect == "mysql" {
+		return strings.ReplaceAll(query, `"`, "`")
+	}
 	if d.Dialect != "pgsql" {
 		return query
 	}
@@ -74,6 +84,21 @@ func (d *DB) Query(query string, args ...any) (*sql.Rows, error) {
 // QueryRow runs a single row query with dialect rebinding.
 func (d *DB) QueryRow(query string, args ...any) *sql.Row {
 	return d.DB.QueryRow(d.Rebind(query), args...)
+}
+
+// InsertID runs an INSERT into a table with an auto-increment id and returns the
+// new id. pgx does not implement LastInsertId, PostgreSQL uses RETURNING instead.
+func (d *DB) InsertID(query string, args ...any) (int64, error) {
+	if d.Dialect == "pgsql" {
+		var id int64
+		err := d.QueryRow(query+" RETURNING id", args...).Scan(&id)
+		return id, err
+	}
+	res, err := d.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
 }
 
 func (d *DB) autoincrement() string {
@@ -123,16 +148,16 @@ func (d *DB) schema() []string {
 
 		`CREATE TABLE IF NOT EXISTS options (
 			id ` + pk + `,
-			key VARCHAR(255) NOT NULL UNIQUE,
+			"key" VARCHAR(255) NOT NULL UNIQUE,
 			value ` + t + ` NOT NULL
 		)`,
 
-		`CREATE TABLE IF NOT EXISTS groups (
+		`CREATE TABLE IF NOT EXISTS "groups" (
 			id ` + pk + `,
 			user_id BIGINT NULL,
 			name VARCHAR(255) NOT NULL,
 			order_column INTEGER NULL,
-			show_in_chips BOOLEAN NOT NULL DEFAULT 1,
+			show_in_chips BOOLEAN NOT NULL DEFAULT TRUE,
 			created_at TIMESTAMP NULL,
 			updated_at TIMESTAMP NULL,
 			CONSTRAINT groups_user_id_foreign FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
@@ -155,7 +180,7 @@ func (d *DB) schema() []string {
 			created_at TIMESTAMP NULL,
 			updated_at TIMESTAMP NULL,
 			CONSTRAINT twofaccounts_user_id_foreign FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-			CONSTRAINT twofaccounts_group_id_foreign FOREIGN KEY (group_id) REFERENCES groups (id) ON DELETE SET NULL
+			CONSTRAINT twofaccounts_group_id_foreign FOREIGN KEY (group_id) REFERENCES "groups" (id) ON DELETE SET NULL
 		)`,
 
 		`CREATE TABLE IF NOT EXISTS twofaccount_shares (
@@ -287,6 +312,27 @@ func (d *DB) schema() []string {
 		`CREATE UNIQUE INDEX IF NOT EXISTS oauth_identities_provider_subject_unique ON oauth_identities (provider, subject)`,
 		`CREATE INDEX IF NOT EXISTS oauth_identities_user_id_idx ON oauth_identities (user_id)`,
 
+		`CREATE TABLE IF NOT EXISTS user_sessions (
+			id VARCHAR(64) NOT NULL PRIMARY KEY,
+			user_id BIGINT NOT NULL,
+			ip_address VARCHAR(45) NULL,
+			user_agent ` + t + ` NULL,
+			created_at BIGINT NOT NULL,
+			last_activity BIGINT NOT NULL,
+			CONSTRAINT user_sessions_user_id_foreign FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions (user_id)`,
+
+		`CREATE TABLE IF NOT EXISTS icon_uploads (
+			id ` + pk + `,
+			name VARCHAR(255) NOT NULL,
+			user_id BIGINT NOT NULL,
+			created_at BIGINT NOT NULL,
+			CONSTRAINT icon_uploads_user_id_foreign FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS icon_uploads_name_user_unique ON icon_uploads (name, user_id)`,
+		`CREATE INDEX IF NOT EXISTS icon_uploads_user_id_idx ON icon_uploads (user_id)`,
+
 		`CREATE TABLE IF NOT EXISTS migrations (
 			id INTEGER PRIMARY KEY,
 			migration VARCHAR(255) NOT NULL,
@@ -298,18 +344,32 @@ func (d *DB) schema() []string {
 // Migrate creates the schema if needed and applies additive upgrades.
 func (d *DB) Migrate() error {
 	for _, stmt := range d.schema() {
-		if _, err := d.DB.Exec(stmt); err != nil {
+		if err := d.applySchema(stmt); err != nil {
 			return fmt.Errorf("schema: %w\nstatement: %s", err, stmt)
 		}
 	}
 	// Additive upgrades for databases created by earlier builds.
 	upgrades := []string{
-		`ALTER TABLE groups ADD COLUMN show_in_chips BOOLEAN NOT NULL DEFAULT 1`,
+		`ALTER TABLE "groups" ADD COLUMN show_in_chips BOOLEAN NOT NULL DEFAULT TRUE`,
 	}
 	for _, stmt := range upgrades {
-		_, _ = d.DB.Exec(stmt) // fails when the column already exists
+		_, _ = d.Exec(stmt) // fails when the column already exists
 	}
 	return nil
+}
+
+// applySchema runs one DDL statement. MySQL has no CREATE INDEX IF NOT EXISTS, so
+// the clause is dropped there and an already existing index (1061) is accepted.
+func (d *DB) applySchema(stmt string) error {
+	if d.Dialect == "mysql" && strings.Contains(stmt, "INDEX IF NOT EXISTS") {
+		_, err := d.Exec(strings.Replace(stmt, " IF NOT EXISTS", "", 1))
+		if err != nil && strings.Contains(err.Error(), "1061") {
+			return nil
+		}
+		return err
+	}
+	_, err := d.Exec(stmt)
+	return err
 }
 
 // Now returns the current time formatted for the dialect's timestamp columns.

@@ -93,10 +93,22 @@ type cacheEntry struct {
 	expires  time.Time
 }
 
+// failureEntry remembers a recent discovery failure: the public configuration
+// endpoint triggers discovery, so a dead provider must not turn every anonymous
+// request into outbound traffic.
+type failureEntry struct {
+	err     error
+	expires time.Time
+}
+
 var (
-	cacheMu sync.Mutex
-	cache   = map[string]cacheEntry{}
+	cacheMu  sync.Mutex
+	cache    = map[string]cacheEntry{}
+	failures = map[string]failureEntry{}
 )
+
+// failureTTL is how long a failed discovery is remembered.
+const failureTTL = 30 * time.Second
 
 // Discover fetches the provider document of issuer and caches it for 30 minutes.
 // It tries the OpenID Connect well-known location first and falls back to the
@@ -109,18 +121,26 @@ func Discover(ctx context.Context, issuer string) (*Provider, error) {
 
 	cacheMu.Lock()
 	entry, ok := cache[key]
+	failure, failed := failures[key]
 	cacheMu.Unlock()
 	if ok && time.Now().Before(entry.expires) {
 		return entry.provider, nil
 	}
+	if failed && time.Now().Before(failure.expires) {
+		return nil, failure.err
+	}
 
 	provider, err := discoverUncached(ctx, key)
 	if err != nil {
+		cacheMu.Lock()
+		failures[key] = failureEntry{err: err, expires: time.Now().Add(failureTTL)}
+		cacheMu.Unlock()
 		return nil, err
 	}
 
 	cacheMu.Lock()
 	cache[key] = cacheEntry{provider: provider, expires: time.Now().Add(cacheTTL)}
+	delete(failures, key)
 	cacheMu.Unlock()
 	return provider, nil
 }
@@ -129,7 +149,9 @@ func Discover(ctx context.Context, issuer string) (*Provider, error) {
 func ResetCache() {
 	cacheMu.Lock()
 	cache = map[string]cacheEntry{}
+	failures = map[string]failureEntry{}
 	cacheMu.Unlock()
+	resetJWKS()
 }
 
 // NormalizeIssuer trims the surrounding whitespace and any trailing slash.
@@ -195,6 +217,15 @@ func fetchProvider(ctx context.Context, endpoint, issuer string) (*Provider, err
 	}
 	if provider.Issuer == "" {
 		provider.Issuer = issuer
+	}
+	// A provider reached over TLS must not downgrade the exchange of the code, the
+	// client secret or the tokens to clear text.
+	if strings.HasPrefix(strings.ToLower(issuer), "https://") {
+		for _, target := range []string{provider.AuthorizationEndpoint, provider.TokenEndpoint, provider.UserInfoEndpoint, provider.JWKSURI} {
+			if target != "" && !strings.HasPrefix(strings.ToLower(target), "https://") {
+				return nil, fmt.Errorf("%s: the discovery document announces a non-HTTPS endpoint", endpoint)
+			}
+		}
 	}
 	return &provider, nil
 }
@@ -356,17 +387,13 @@ func postTokenRequest(ctx context.Context, endpoint string, form url.Values, cli
 	}, resp.StatusCode, nil
 }
 
-// UserInfo returns the claims of the signed-in user. When the provider does not
-// advertise a userinfo_endpoint the claims are read from the token itself (the
-// ID token payload), which is enough for account linking.
+// UserInfo returns the claims of the userinfo endpoint. The caller must already
+// hold a verified ID token and compare its subject with the one returned here.
 func UserInfo(ctx context.Context, p *Provider, accessToken string) (map[string]any, error) {
 	if p == nil {
 		return nil, errors.New("oidc: no provider")
 	}
 	if p.UserInfoEndpoint == "" {
-		if claims, err := ParseClaims(accessToken); err == nil {
-			return claims, nil
-		}
 		return nil, ErrNoUserInfoEndpoint
 	}
 	if ctx == nil {
@@ -402,31 +429,6 @@ func UserInfo(ctx context.Context, p *Provider, accessToken string) (map[string]
 	}
 	if claims == nil {
 		return nil, errors.New("oidc: empty userinfo document")
-	}
-	return claims, nil
-}
-
-// ParseClaims decodes the payload of a JWT without verifying its signature. It
-// is only used to read the identity claims after a successful code exchange,
-// never to make a trust decision on its own.
-func ParseClaims(token string) (map[string]any, error) {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return nil, errors.New("oidc: empty token")
-	}
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return nil, errors.New("oidc: not a JWT")
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
-	if err != nil {
-		if raw, err = base64.URLEncoding.DecodeString(parts[1]); err != nil {
-			return nil, fmt.Errorf("oidc: invalid JWT payload: %w", err)
-		}
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		return nil, fmt.Errorf("oidc: invalid JWT payload: %w", err)
 	}
 	return claims, nil
 }

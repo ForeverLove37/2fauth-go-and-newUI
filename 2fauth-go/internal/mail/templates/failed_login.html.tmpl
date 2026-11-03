@@ -1,0 +1,16 @@
+{{define "body"}}<tr>
+  <td class="email-pad" style="padding:38px 44px 10px;">
+    <h1 class="email-title" style="margin:0 0 14px;color:#101727;font-size:30px;line-height:40px;font-weight:700;">{{if .ZH}}有人用错误的密码尝试登录{{else}}A sign-in attempt failed{{end}}</h1>
+    <p style="margin:0 0 20px;color:#101727;font-size:17px;line-height:30px;">{{if .ZH}}这次尝试没有成功，<strong>{{.V.Email}}</strong> 没有被登录。{{else}}The attempt did not succeed: <strong>{{.V.Email}}</strong> was not signed in.{{end}}</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid #dfe4ec;">
+      {{if .ZH}}{{template "fact" (fact "时间" .V.Time)}}{{template "fact" (fact "IP 地址" .V.IP)}}{{template "fact" (fact "浏览器" .V.Browser)}}{{template "fact" (fact "系统" .V.Platform)}}
+      {{else}}{{template "fact" (fact "Time" .V.Time)}}{{template "fact" (fact "IP address" .V.IP)}}{{template "fact" (fact "Browser" .V.Browser)}}{{template "fact" (fact "System" .V.Platform)}}{{end}}
+    </table>
+  </td>
+</tr>
+<tr>
+  <td class="email-pad" style="padding:24px 44px 38px;">
+    <p style="margin:0 0 20px;color:#101727;font-size:16px;line-height:28px;">{{if .ZH}}如果是你输错了密码，可以忽略这封邮件。如果不是，建议换一个更长的密码。同一账户短时间内最多发送一封这样的提醒。{{else}}If you mistyped your password, ignore this e-mail. If not, consider a longer password. We send at most one such alert in a short period.{{end}}</p>
+    {{if .ZH}}{{template "button" (btn .V.SecurityURL "检查账户安全")}}{{else}}{{template "button" (btn .V.SecurityURL "Review account security")}}{{end}}
+  </td>
+</tr>{{end}}

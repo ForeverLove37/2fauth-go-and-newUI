@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api } from '../api/client'
+import { api, type ImportResult } from '../api/client'
 import type { Account, ApiError, Group } from '../api/types'
 import { useT } from '../i18n'
 import { download, stamp } from '../lib/format'
@@ -16,13 +16,24 @@ interface TransferProps {
 export function ImportExportModal({ accounts, onClose, onImported }: TransferProps) {
   const t = useT()
   const toast = useStore((state) => state.toast)
+  // Only the owner can export an account: a share only grants generating its codes.
+  const exportable = accounts.filter((account) => !account.is_borrowed)
   const [payload, setPayload] = useState('')
+  const [importPassphrase, setImportPassphrase] = useState('')
+  const [needsPassphrase, setNeedsPassphrase] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [progress, setProgress] = useState('')
-  const [selected, setSelected] = useState<number[]>(accounts.map((account) => account.id))
+  const [issues, setIssues] = useState<ImportResult['issues']>(null)
+  // What is left out, rather than what is chosen: accounts imported while this dialog
+  // is open are part of the export by default.
+  const [excluded, setExcluded] = useState<number[]>([])
+  const selected = exportable.map((account) => account.id).filter((id) => !excluded.includes(id))
+  const [passphrase, setPassphrase] = useState('')
+  const [confirmation, setConfirmation] = useState('')
 
   async function readFile(file: File) {
+    setNeedsPassphrase(false)
+    setImportPassphrase('')
     if (file.type.startsWith('image/')) {
       setBusy(true)
       try {
@@ -46,56 +57,65 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
     }
     setBusy(true)
     setError('')
+    setIssues(null)
     try {
-      const migrated = await api.importAccounts(payload.trim())
-      const fresh = migrated.filter((account) => account.id < 0 && account.id !== -1)
-      const duplicates = migrated.filter((account) => account.id === -1)
-      setProgress(
-        t('Found {total} accounts ({duplicates} already known) — saving…', {
-          total: migrated.length,
-          duplicates: duplicates.length,
+      const result = await api.importPayload(payload.trim(), importPassphrase)
+      setNeedsPassphrase(false)
+      toast(
+        'success',
+        t('{imported} accounts imported, {duplicates} already known, {invalid} not usable', {
+          imported: result.imported,
+          duplicates: result.duplicates,
+          invalid: result.invalid,
         }),
       )
-
-      let saved = 0
-      for (const account of fresh) {
-        await api.createAccount({
-          otp_type: account.otp_type,
-          service: account.service ?? '',
-          account: account.account ?? '',
-          secret: account.secret,
-          digits: account.digits,
-          algorithm: account.algorithm,
-          period: account.period ?? undefined,
-          counter: account.counter ?? undefined,
-        })
-        saved += 1
-        setProgress(t('Saved {saved}/{total}…', { saved, total: fresh.length }))
-      }
-      toast('success', t('{count} accounts imported', { count: saved }))
       await onImported()
+      if (result.invalid > 0) {
+        setIssues(result.issues)
+        return
+      }
       onClose()
+    } catch (caught) {
+      const typed = caught as ApiError
+      if (typed.needsPassphrase) setNeedsPassphrase(true)
+      setError(typed.needsPassphrase ? t('This file is encrypted: enter its passphrase') : typed.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function exportEncrypted() {
+    if (selected.length === 0) return
+    setBusy(true)
+    setError('')
+    try {
+      const file = await api.exportEncrypted(selected, passphrase)
+      download(`2fauth_export_${stamp()}.encrypted.json`, JSON.stringify(file, null, 2), 'application/json')
+      setPassphrase('')
+      setConfirmation('')
+      toast('success', t('Encrypted export downloaded'))
     } catch (caught) {
       setError((caught as ApiError).message)
     } finally {
       setBusy(false)
-      setProgress('')
     }
   }
 
   async function exportJson() {
-    if (selected.length === 0) return
+    if (selected.length === 0 || !window.confirm(t('This file will contain your secrets in clear text. Continue?'))) return
     const blob = await api.exportBlob(selected)
     download(`2fauth_export_${stamp()}.json`, blob as unknown as string, 'application/json')
     toast('success', t('Export downloaded'))
   }
 
   async function exportOtpauth() {
-    if (selected.length === 0) return
+    if (selected.length === 0 || !window.confirm(t('This file will contain your secrets in clear text. Continue?'))) return
     const items = (await api.exportAccounts(selected, true)) as { uri: string }[]
     download(`2fauth_export_${stamp()}.txt`, items.map((item) => item.uri).join('\n'), 'text/plain')
     toast('success', t('otpauth export downloaded'))
   }
+
+  const passphraseOk = passphrase.length >= 12 && passphrase === confirmation
 
   return (
     <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -109,21 +129,40 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
         <div className="modal-body stack">
           <div>
             <div className="field">
-              <label>{t('Import')}</label>
+              <label htmlFor="import-payload">{t('Import')}</label>
               <textarea
+                id="import-payload"
                 value={payload}
-                onChange={(event) => setPayload(event.target.value)}
+                onChange={(event) => {
+                  setPayload(event.target.value)
+                  setNeedsPassphrase(false)
+                }}
                 placeholder={t(
-                  'Paste a 2FAuth JSON export, an Aegis/2FAS JSON, a list of otpauth:// URIs or an otpauth-migration URI',
+                  'Paste an export or load a file: 2FAuth, Aegis, 2FAS, Google Authenticator, Bitwarden, andOTP, FreeOTP+, Authenticator Pro, Raivo, LastPass, Proton, CSV or a list of otpauth:// URIs',
                 )}
               />
             </div>
+            {needsPassphrase && (
+              <div className="field">
+                <label htmlFor="import-passphrase">{t('Passphrase of the file')}</label>
+                <input
+                  id="import-passphrase"
+                  className="input"
+                  type="password"
+                  autoComplete="off"
+                  autoFocus
+                  value={importPassphrase}
+                  onChange={(event) => setImportPassphrase(event.target.value)}
+                  onKeyDown={(event) => event.key === 'Enter' && void runImport()}
+                />
+              </div>
+            )}
             <div className="flex wrap">
               <label className="btn small" style={{ cursor: 'pointer' }}>
                 <Icon name="upload" size={14} /> {t('Load file')}
                 <input
                   type="file"
-                  accept=".json,.txt,.csv,image/*"
+                  accept=".json,.txt,.csv,.2fas,.aes,image/*"
                   hidden
                   onChange={(event) => {
                     const file = event.target.files?.[0]
@@ -132,24 +171,35 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
                 />
               </label>
               <button className="btn small primary" onClick={runImport} disabled={busy}>
-                {t('Import now')}
+                {busy ? t('Working…') : t('Import now')}
               </button>
-              {progress && <span className="hint">{progress}</span>}
             </div>
+            {issues && issues.length > 0 && (
+              <div style={{ marginTop: 10 }}>
+                <p className="hint">{t('These entries could not be used:')}</p>
+                <ul className="hint" style={{ margin: '4px 0 0 18px' }}>
+                  {issues.map((issue) => (
+                    <li key={issue.index}>
+                      {issue.service || `#${issue.index + 1}`} — {issue.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
             <div className="field">
               <label>
-                {t('Export {selected} of {total} accounts', { selected: selected.length, total: accounts.length })}
+                {t('Export {selected} of {total} accounts', { selected: selected.length, total: exportable.length })}
               </label>
               <div className="flex wrap">
-                {accounts.map((account) => (
+                {exportable.map((account) => (
                   <button
                     key={account.id}
                     className={`chip${selected.includes(account.id) ? ' active' : ''}`}
                     onClick={() =>
-                      setSelected((current) =>
+                      setExcluded((current) =>
                         current.includes(account.id)
                           ? current.filter((id) => id !== account.id)
                           : [...current, account.id],
@@ -160,12 +210,43 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
                   </button>
                 ))}
               </div>
+              {exportable.length < accounts.length && (
+                <span className="hint">{t('Accounts shared with you cannot be exported.')}</span>
+              )}
             </div>
-            <div className="flex wrap">
-              <button className="btn small" onClick={exportJson} disabled={selected.length === 0}>
-                <Icon name="download" size={14} /> 2FAuth JSON
+            <div className="row">
+              <div className="field">
+                <label htmlFor="export-passphrase">{t('Passphrase, 12 characters or more')}</label>
+                <input
+                  id="export-passphrase"
+                  className="input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={passphrase}
+                  onChange={(event) => setPassphrase(event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="export-confirmation">{t('Confirm')}</label>
+                <input
+                  id="export-confirmation"
+                  className="input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmation}
+                  onChange={(event) => setConfirmation(event.target.value)}
+                />
+              </div>
+            </div>
+            <p className="hint">{t('Keep this passphrase safe: without it the file cannot be opened by anyone.')}</p>
+            <div className="flex wrap" style={{ marginTop: 10 }}>
+              <button className="btn small primary" onClick={exportEncrypted} disabled={busy || !passphraseOk || selected.length === 0}>
+                <Icon name="lock" size={14} /> {t('Encrypted export')}
               </button>
-              <button className="btn small" onClick={exportOtpauth} disabled={selected.length === 0}>
+              <button className="btn small ghost" onClick={exportJson} disabled={selected.length === 0}>
+                <Icon name="download" size={14} /> {t('Unencrypted JSON')}
+              </button>
+              <button className="btn small ghost" onClick={exportOtpauth} disabled={selected.length === 0}>
                 <Icon name="download" size={14} /> {t('otpauth list')}
               </button>
             </div>

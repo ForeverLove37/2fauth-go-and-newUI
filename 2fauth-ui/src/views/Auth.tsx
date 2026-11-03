@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import Icon from '../components/Icon'
+import { api } from '../api/client'
 import { useStore } from '../store/useStore'
 import { sso, type SsoConfig } from '../api/sso'
 import { locales, useI18nStore, useT } from '../i18n'
@@ -13,6 +14,8 @@ const ssoErrors: Record<string, string> = {
   exchange: 'Could not exchange the authorization code — check the client secret and redirect URI',
   userinfo: 'The identity provider did not return user information',
   email: 'The identity provider did not return an e-mail address',
+  email_unverified: 'The identity provider has not verified this e-mail address',
+  token: 'The identity token of the provider could not be verified',
   register_disabled: 'This instance does not accept new accounts',
   account: 'No account matches this identity, contact an administrator',
   server: 'Internal server error',
@@ -158,10 +161,16 @@ export function Login() {
         {error && <p className="error-text">{error}</p>}
         {ssoError && <p className="error-text">{ssoError}</p>}
 
-        {!ssoOnly && (
-          <button className="btn primary" type="submit" disabled={busy}>
-            {busy ? t('Signing in…') : t('Sign in')}
-          </button>
+        {/* Under SSO-only the server still accepts the password of an administrator:
+            the way back in when the provider is down. */}
+        <button className={ssoOnly ? 'btn ghost' : 'btn primary'} type="submit" disabled={busy}>
+          {busy ? t('Signing in…') : ssoOnly ? t('Administrator sign-in') : t('Sign in')}
+        </button>
+
+        {config?.mailEnabled && !ssoOnly && (
+          <p className="auth-switch">
+            <Link to="/password/lost">{t('Forgot your password?')}</Link>
+          </p>
         )}
 
         {ssoConfig?.enabled && (
@@ -179,6 +188,138 @@ export function Login() {
             {t('No account yet?')} <Link to="/register">{t('Create one')}</Link>
           </p>
         )}
+      </form>
+    </div>
+  )
+}
+
+/** Asks for a reset link. The answer does not tell whether the address exists. */
+export function PasswordLost() {
+  const t = useT()
+  const { busy, error, fields, run } = useSubmit()
+  const [email, setEmail] = useState('')
+  const [sent, setSent] = useState(false)
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    await run(async () => {
+      await api.passwordLost(email)
+      setSent(true)
+    })
+  }
+
+  return (
+    <div className="auth">
+      <LanguagePicker />
+      <form className="auth-card" onSubmit={submit}>
+        <div className="auth-hero">
+          <div className="brand-mark">2F</div>
+          <h1>{t('Reset your password')}</h1>
+          <p className="sub">{t('We will send a link to the address of your account.')}</p>
+        </div>
+        {sent ? (
+          <p role="status">{t('If an account uses this address, a link is on its way. It works for 60 minutes.')}</p>
+        ) : (
+          <>
+            <div className="field">
+              <label htmlFor="email">{t('Email')}</label>
+              <input
+                id="email"
+                className="input"
+                type="email"
+                autoComplete="username"
+                autoFocus
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                required
+              />
+              <FieldError messages={fields.email} />
+            </div>
+            {error && <p className="error-text">{error}</p>}
+            <button className="btn primary" type="submit" disabled={busy}>
+              {t('Send the link')}
+            </button>
+          </>
+        )}
+        <p className="auth-switch">
+          <Link to="/login">{t('Back to sign in')}</Link>
+        </p>
+      </form>
+    </div>
+  )
+}
+
+/** Target of the link of the reset e-mail. */
+export function PasswordReset() {
+  const t = useT()
+  const [params] = useSearchParams()
+  const { busy, error, fields, run } = useSubmit()
+  const [password, setPassword] = useState('')
+  const [confirmation, setConfirmation] = useState('')
+  const [done, setDone] = useState(false)
+  const email = params.get('email') ?? ''
+  const token = params.get('token') ?? ''
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    await run(async () => {
+      await api.passwordReset(email, token, password)
+      setDone(true)
+    })
+  }
+
+  return (
+    <div className="auth">
+      <LanguagePicker />
+      <form className="auth-card" onSubmit={submit}>
+        <div className="auth-hero">
+          <div className="brand-mark">2F</div>
+          <h1>{t('Choose a new password')}</h1>
+          <p className="sub">{email}</p>
+        </div>
+        {done ? (
+          <p role="status">{t('Your password was changed. Your other devices were signed out.')}</p>
+        ) : !email || !token ? (
+          <p className="error-text">{t('This link is incomplete: open the one from the e-mail again.')}</p>
+        ) : (
+          <>
+            <div className="field">
+              <label htmlFor="password">{t('New password')}</label>
+              <input
+                id="password"
+                className="input"
+                type="password"
+                autoComplete="new-password"
+                autoFocus
+                minLength={8}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+              />
+              <FieldError messages={fields.password} />
+            </div>
+            <div className="field">
+              <label htmlFor="confirmation">{t('Confirm')}</label>
+              <input
+                id="confirmation"
+                className="input"
+                type="password"
+                autoComplete="new-password"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                required
+              />
+            </div>
+            <FieldError messages={fields.email} />
+            {error && !fields.email && <p className="error-text">{error}</p>}
+            <button className="btn primary" type="submit" disabled={busy || password !== confirmation}>
+              {t('Change password')}
+            </button>
+          </>
+        )}
+        <p className="auth-switch">
+          <Link to="/login">{t('Back to sign in')}</Link>
+        </p>
       </form>
     </div>
   )

@@ -2,6 +2,7 @@
 package services
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 
@@ -215,6 +216,8 @@ func toStr(v any) string {
 	switch t := v.(type) {
 	case string:
 		return t
+	case json.Number:
+		return t.String()
 	case int:
 		return itoa(int64(t))
 	case int64:

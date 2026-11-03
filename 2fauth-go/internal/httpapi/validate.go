@@ -3,7 +3,10 @@ package httpapi
 import (
 	"fmt"
 	"net/http"
+	netmail "net/mail"
 	"strings"
+
+	"2fauth/internal/crypt"
 )
 
 // validator collects Laravel-like validation errors for a request.
@@ -80,8 +83,26 @@ func (v *validator) maxLen(field, value string, n int) *validator {
 
 // email validates an email address.
 func (v *validator) email(field, value string) *validator {
-	if value != "" && !strings.Contains(value, "@") {
+	if value == "" {
+		return v
+	}
+	parsed, err := netmail.ParseAddress(value)
+	if err != nil || parsed.Address != strings.TrimSpace(value) {
 		v.fail(field, fmt.Sprintf("The %s field must be a valid email address.", field))
+	}
+	return v
+}
+
+// password enforces the length a password can be hashed with.
+func (v *validator) password(field, value string) *validator {
+	if value == "" {
+		return v
+	}
+	if len(value) < 8 {
+		v.fail(field, fmt.Sprintf("The %s field must be at least 8 characters.", field))
+	}
+	if len(value) > crypt.MaxPasswordBytes {
+		v.fail(field, fmt.Sprintf("The %s field must not be greater than %d bytes.", field, crypt.MaxPasswordBytes))
 	}
 	return v
 }

@@ -27,9 +27,9 @@ returned by any endpoint.
 
 | Route | Status | Notes |
 | --- | --- | --- |
-| `GET /api/v1/sso/config` | ➕ | public: effective enablement, label, `auto_redirect`/`auto_register`, issuer, `redirect_uri`, `start_url`, discovery endpoints, human readable `error` when the issuer cannot be discovered. Never exposes the client secret. |
+| `GET /api/v1/sso/config` | ➕ | public: effective enablement, label, `auto_redirect`, `start_url` and a generic `error`. For an administrator also `auto_register`, `issuer`, `redirect_uri`, the discovery endpoints and the detail of the error. Never exposes the client secret. |
 | `GET /socialite/redirect/openid` | ➕ | starts the flow: encrypted `oidc_tx` cookie (`state`, `nonce`, PKCE verifier), 302 to the provider; `?format=json` answers `{"url": …}` |
-| `GET /socialite/callback/openid` | ➕ | validates `state`, exchanges the code, resolves the account (identity → same e-mail → auto-registration), rotates the session, logs the authentication; failures 302 to `/login?sso_error=<cancelled\|state\|provider\|exchange\|userinfo\|email\|register_disabled\|account\|server>` |
+| `GET /socialite/callback/openid` | ➕ | validates `state`, exchanges the code, verifies the ID token, resolves the account (identity → verified e-mail → auto-registration), opens a session, logs the authentication; failures 302 to `/login?sso_error=<cancelled\|state\|provider\|exchange\|token\|userinfo\|email\|email_unverified\|register_disabled\|account\|server>` |
 | `GET /api/v1/sso/settings` | ➕ | admin: `enabled`, `issuer`, `client_id`, `client_secret_set`, `scopes`, `label`, `auto_register`, `auto_redirect`, `redirect_uri` |
 | `PUT /api/v1/sso/settings` | ➕ | admin: partial update (`enabled`, `issuer`, `client_id`, `client_secret`, `clear_secret`, `scopes`, `label`, `auto_register`, `auto_redirect`), 422 on an invalid issuer |
 | `POST /api/v1/sso/test` | ➕ | admin: runs discovery, `{"ok":true,"discovery":…}` or `422 {"ok":false,"error":…}` |
@@ -39,6 +39,14 @@ returned by any endpoint.
 `openid.*` options are hidden from the generic `GET /api/v1/settings` listing and
 `GET /api/v1/settings/{name}`, which keep serving only the upstream setting names.
 
+## Additions: e-mail, import and export
+
+| Route | Status | Notes |
+| --- | --- | --- |
+| `GET`, `PUT /api/v1/mail/settings` | ➕ | admin: SMTP transport; the password is stored encrypted and never returned |
+| `POST /api/v1/twofaccounts/import` | ➕ | reads any format of [IMPORT.md](IMPORT.md) (`payload`, optional `passphrase`) and keeps the new accounts in one request; answers `{total, imported, duplicates, invalid, issues}` |
+| `POST /api/v1/twofaccounts/export` | ➕ | encrypted export (`ids`, `passphrase` of 12+ characters), see [IMPORT.md](IMPORT.md) |
+
 ## Public
 
 | Route | Status | Notes |
@@ -46,9 +54,12 @@ returned by any endpoint.
 | `GET /` (SPA + globals) | ✅ | `appSettings`, `appConfig`, `urls`, `defaultPreferences`, `lockedPreferences`, `appVersion`, `isDemoApp`, `isTestingApp`, `appLocales`, `csrf-token` meta tag |
 | `POST /user` (register) | ✅ | 403 when `disableRegistration`; first user becomes admin; returns `authenticatedPayload` |
 | `POST /user/login` | ✅ | session rotation, auth log, 429 after `LOGIN_THROTTLE` attempts |
-| `GET /user/logout` | ✅ | closes the auth log, drops the session |
-| `POST /user/password/lost` | 🟡 | validates the payload and answers like Laravel, but sends no e-mail |
-| `POST /user/password/reset` | 🟡 | answers success, does not reset the password |
+| `GET /user/logout` | ✅ | closes the auth log, ends the server-side session |
+| `POST /user/password/lost` | ✅ | same answer whether or not the address exists; mails a link valid 60 minutes when SMTP is configured |
+| `POST /user/password/reset` | ✅ | single-use token (stored hashed); ends the sessions and revokes the personal access tokens |
+| `POST /user/logout` | ➕ | same as `GET /user/logout`, which now needs the CSRF header too |
+| `POST /user/email/verification` | ➕ | mails a confirmation link for the address of the signed-in user |
+| `GET /user/email/verify` | ➕ | target of that link, redirects to the account settings |
 | `GET /refresh-csrf` | ✅ | returns the token as a JSON string |
 | `GET /manifest.json` | ✅ | |
 | `GET /up` | ✅ | static health page |
@@ -91,9 +102,9 @@ returned by any endpoint.
 | `POST /api/v1/twofaccounts/otp` | ✅ | generates without persisting |
 | `GET /api/v1/twofaccounts/{id}/qrcode` | ✅ | PNG data URI |
 | `POST /api/v1/qrcode/decode` | ✅ | multipart `qrcode`, decoded with `gozxing` |
-| `GET /api/v1/twofaccounts/export` | ✅ | 2FAuth JSON envelope and `otpauth` list |
+| `GET /api/v1/twofaccounts/export` | ✅ | 2FAuth JSON (`app`, `schema`, `datetime`, `data`) and `otpauth` list; owners only |
 | `POST /api/v1/twofaccounts/preview` | ✅ | |
-| `POST /api/v1/twofaccounts/migration` | ✅ | 2FAuth JSON, Aegis, 2FAS, Google migration URI, plain lists; duplicates flagged `-1`, new accounts `-2` |
+| `POST /api/v1/twofaccounts/migration` | ✅ | every format of [IMPORT.md](IMPORT.md), optional `passphrase`; duplicates flagged `-1`, new accounts `-2` |
 | `GET /api/v1/twofaccounts/{id}/otp-logs` | ✅ | records requester/owner/ip/type/counter |
 
 ## Groups and sharing
@@ -171,7 +182,7 @@ retries the original casing variant.
 | `GET /api/v1/users/{id}/authentications` | ✅ | login/logout sessions with basic user-agent parsing |
 | `GET|POST /api/v1/settings`, `GET|PUT|DELETE /api/v1/settings/{name}` | ✅ | `{{1}}`/`{{}}` boolean encoding preserved |
 | `GET /system/infos` | 🟡 | PHP-specific rows replaced by Go equivalents |
-| `POST /system/test-email` | 🟡 | 424 with a "no transport" detail |
+| `POST /system/test-email` | ✅ | really sends to the administrator; 424 with the transport error |
 | `GET /system/latestRelease` | ✅ | GitHub release lookup, stores `latestRelease`/`lastRadarScan` |
 | `GET /system/optimize`, `/system/clear-cache` | 🟡 | no-op, all exit codes 0 |
 

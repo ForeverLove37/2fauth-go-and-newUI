@@ -23,11 +23,11 @@ app stays reachable at `/legacy`.
 
 | Layer | Choice |
 | --- | --- |
-| UI | React 18, React Router 6, TypeScript 5 (strict) |
+| UI | React 18, React Router 7, TypeScript 5 (strict) |
 | 3D | React Three Fiber 8, drei 9, three r169 — particle field, wireframe core, halo rings, floating shards, infinite grid |
 | Stage | custom projection (`src/stage/`): 3D layout math + perspective projection to DOM transforms, all cards billboarded, WebGL backdrop behind |
 | State | zustand (session, accounts, groups, preferences, toasts) |
-| Build | Vite 5 |
+| Build | Vite 6 |
 
 ## Scripts
 

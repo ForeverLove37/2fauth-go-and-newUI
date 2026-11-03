@@ -1,0 +1,13 @@
+{{define "subject"}}{{if .ZH}}确认你的 {{.App}} 邮箱地址{{else}}Confirm your {{.App}} e-mail address{{end}}{{end}}
+{{define "preheader"}}{{if .ZH}}确认后可用于找回密码和关联单点登录。{{else}}Needed for password recovery and single sign-on.{{end}}{{end}}
+{{define "text"}}{{if .ZH}}请确认 {{.V.Email}} 是你的邮箱地址。确认后，{{.App}} 才能把它用于找回密码和关联单点登录。
+
+确认邮箱：
+{{.V.VerifyURL}}
+
+链接 {{.V.ExpiresHours}} 小时内有效。如果这不是你的账户，忽略这封邮件即可。{{else}}Please confirm that {{.V.Email}} is your address. Once confirmed, {{.App}} can use it for password recovery and single sign-on.
+
+Confirm this address:
+{{.V.VerifyURL}}
+
+The link works for {{.V.ExpiresHours}} hours. If this isn't your account, ignore this e-mail.{{end}}{{end}}

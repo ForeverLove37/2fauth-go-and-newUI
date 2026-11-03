@@ -210,8 +210,8 @@ func TestFetchIconFallsThroughTheChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get(%q): %v", res.Name, err)
 	}
-	if string(content) != validSVG {
-		t.Errorf("stored content does not match the winning body")
+	if !strings.Contains(string(content), `d="M0 0h16v16H0z"`) {
+		t.Errorf("stored content does not match the winning body: %s", content)
 	}
 	if files := iconFiles(t, svc); len(files) != 1 {
 		t.Errorf("stored files = %v, want exactly one", files)
@@ -319,8 +319,8 @@ func TestFetchIconIconifySearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if string(content) != validSVG {
-		t.Error("stored icon is not the icon fetched from the search result")
+	if !strings.Contains(string(content), `d="M0 0h16v16H0z"`) {
+		t.Errorf("stored icon is not the icon fetched from the search result: %s", content)
 	}
 }
 

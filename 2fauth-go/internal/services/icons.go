@@ -64,6 +64,9 @@ const (
 	maxIconBytes = 2 << 20 // 2 MiB
 )
 
+// ErrUnsupportedIcon reports that the bytes are not an acceptable image.
+var ErrUnsupportedIcon = errors.New("unsupported icon")
+
 // ErrIconNotFound reports that no provider of the chain could supply an icon.
 var ErrIconNotFound = errors.New("icon not found for this service")
 
@@ -228,7 +231,7 @@ const ProviderCount = 6
 // case only the configuration defaults of the provider chain are honoured.
 func NewIconService(cfg *config.Config, st *store.Store, settings *SettingService) *IconService {
 	dir := filepath.Join(cfg.BasePath, "storage", "icons")
-	_ = os.MkdirAll(dir, 0o755)
+	_ = os.MkdirAll(dir, 0o750)
 	i := &IconService{cfg: cfg, st: st, dir: dir, settings: settings}
 	i.client = i.newClient()
 	return i
@@ -480,7 +483,12 @@ func (i *IconService) FetchIcon(ctx context.Context, service string) (*IconResul
 			continue
 		}
 		// Only the winning body is written, and only once it has been fully
-		// received and identified as an image.
+		// received and identified as an image. Third-party SVGs are cleaned too.
+		if mime == svgMime {
+			if body, err = SanitizeSVG(body); err != nil {
+				continue
+			}
+		}
 		name, err := i.StoreWithExtension(extensionForContentType(mime), body)
 		if err != nil {
 			return nil, err
@@ -637,6 +645,24 @@ func looksLikeSVG(body []byte) bool {
 	return bytes.Contains(lower, []byte("<svg")) && bytes.Contains(lower, []byte("</svg>"))
 }
 
+// imageType identifies an image from its content alone. Unlike sniffIconContent it
+// is strict about SVG: the root element must really be <svg>, so an HTML document
+// that merely contains one is not an image.
+func imageType(body []byte) (string, bool) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return "", false
+	}
+	switch detected := http.DetectContentType(trimmed); detected {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return detected, true
+	}
+	if _, err := SanitizeSVG(trimmed); err == nil {
+		return svgMime, true
+	}
+	return "", false
+}
+
 // ---------------------------------------------------------------------------
 // slugs
 // ---------------------------------------------------------------------------
@@ -737,25 +763,33 @@ func (i *IconService) InDatabase() bool {
 
 // Exists reports whether the icon is available.
 func (i *IconService) Exists(name string) bool {
-	if name == "" {
+	if !ValidIconName(name) {
 		return false
 	}
-	_, err := os.Stat(filepath.Join(i.dir, filepath.Base(name)))
-	return err == nil
+	info, err := os.Stat(filepath.Join(i.dir, name))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // Get reads the raw icon bytes.
 func (i *IconService) Get(name string) ([]byte, error) {
-	return os.ReadFile(filepath.Join(i.dir, filepath.Base(name)))
+	if !ValidIconName(name) {
+		return nil, os.ErrNotExist
+	}
+	return os.ReadFile(filepath.Join(i.dir, name))
 }
 
-// MimeType returns the mime type of a stored icon.
+// MimeType returns the type a stored icon is served with: the one of its content,
+// or "" when the file is not an image.
 func (i *IconService) MimeType(name string) string {
 	content, err := i.Get(name)
 	if err != nil {
 		return ""
 	}
-	return http.DetectContentType(content)
+	mime, ok := imageType(content)
+	if !ok {
+		return ""
+	}
+	return mime
 }
 
 // Store writes an icon, returning its file name.
@@ -763,7 +797,13 @@ func (i *IconService) Store(name string, content []byte) error {
 	if name == "" {
 		name = RandomIconName(content) + ".png"
 	}
-	return os.WriteFile(filepath.Join(i.dir, filepath.Base(name)), content, 0o644)
+	if !ValidIconName(name) {
+		return ErrUnsupportedIcon
+	}
+	if err := os.MkdirAll(i.dir, 0o750); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(i.dir, name), content, 0o640)
 }
 
 // StoreWithExtension writes an icon with the given extension.
@@ -778,9 +818,32 @@ func (i *IconService) StoreWithExtension(extension string, content []byte) (stri
 	return name, nil
 }
 
+// StoreUpload validates untrusted bytes and writes them. The extension is decided
+// by the content, and an SVG is rewritten from a list of harmless elements.
+func (i *IconService) StoreUpload(content []byte) (string, error) {
+	if len(content) > maxIconBytes {
+		return "", ErrUnsupportedIcon
+	}
+	mime, ok := imageType(content)
+	if !ok {
+		return "", ErrUnsupportedIcon
+	}
+	if mime == svgMime {
+		cleaned, err := SanitizeSVG(content)
+		if err != nil {
+			return "", ErrUnsupportedIcon
+		}
+		content = cleaned
+	}
+	return i.StoreWithExtension(extensionForContentType(mime), content)
+}
+
 // Delete removes an icon file.
 func (i *IconService) Delete(name string) error {
-	err := os.Remove(filepath.Join(i.dir, filepath.Base(name)))
+	if !ValidIconName(name) {
+		return os.ErrNotExist
+	}
+	err := os.Remove(filepath.Join(i.dir, name))
 	if os.IsNotExist(err) {
 		return nil
 	}

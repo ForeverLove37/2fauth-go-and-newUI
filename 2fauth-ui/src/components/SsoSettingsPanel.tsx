@@ -26,6 +26,7 @@ export default function SsoSettingsPanel() {
   const [enabled, setEnabled] = useState(false)
   const [autoRegister, setAutoRegister] = useState(true)
   const [autoRedirect, setAutoRedirect] = useState(false)
+  const [trustEmail, setTrustEmail] = useState(false)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [realm, setRealm] = useState('')
@@ -57,6 +58,7 @@ export default function SsoSettingsPanel() {
     setEnabled(loaded.enabled)
     setAutoRegister(loaded.auto_register)
     setAutoRedirect(loaded.auto_redirect)
+    setTrustEmail(Boolean(loaded.trust_unverified_email))
     setClientSecret('')
   }
 
@@ -72,6 +74,7 @@ export default function SsoSettingsPanel() {
         label: label.trim(),
         auto_register: autoRegister,
         auto_redirect: autoRedirect,
+        trust_unverified_email: trustEmail,
       }
       if (clientSecret) payload.client_secret = clientSecret
       const updated = await sso.saveSettings(payload)
@@ -237,6 +240,13 @@ export default function SsoSettingsPanel() {
               <small>{t('Useful when SSO is the only way in')}</small>
             </div>
             <button className={`toggle${autoRedirect ? ' on' : ''}`} onClick={() => setAutoRedirect(!autoRedirect)} />
+          </div>
+          <div className="switch">
+            <div className="switch-label">
+              {t('Trust e-mail addresses the provider has not verified')}
+              <small>{t('Only for providers that never send email_verified. Anyone able to choose their address there could become the local user with that address.')}</small>
+            </div>
+            <button className={`toggle${trustEmail ? ' on' : ''}`} onClick={() => setTrustEmail(!trustEmail)} />
           </div>
 
           <div className="flex wrap" style={{ marginTop: 14 }}>

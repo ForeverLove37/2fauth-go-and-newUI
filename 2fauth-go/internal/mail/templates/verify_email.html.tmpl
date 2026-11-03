@@ -1,0 +1,13 @@
+{{define "body"}}<tr>
+  <td class="email-pad" style="padding:38px 44px 38px;">
+    <h1 class="email-title" style="margin:0 0 16px;color:#101727;font-size:30px;line-height:40px;font-weight:700;">{{if .ZH}}确认你的邮箱地址{{else}}Confirm your e-mail address{{end}}</h1>
+    <p style="margin:0 0 22px;color:#101727;font-size:17px;line-height:30px;">{{if .ZH}}确认后，{{.App}} 才能把这个地址当作你本人的邮箱，用于找回密码和关联单点登录。{{else}}Once confirmed, {{.App}} can treat this address as yours for password recovery and single sign-on.{{end}}</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f3f5f9" style="background:#f3f5f9;border-radius:10px;margin:0 0 26px;"><tr>
+      <td style="padding:18px 22px;color:#101727;font-size:20px;line-height:30px;font-weight:700;word-break:break-all;">{{.V.Email}}</td>
+    </tr></table>
+    {{if .ZH}}{{template "button" (btn .V.VerifyURL "确认邮箱")}}{{else}}{{template "button" (btn .V.VerifyURL "Confirm this address")}}{{end}}
+    <p style="margin:22px 0 0;color:#101727;font-size:16px;line-height:28px;">{{if .ZH}}链接 <strong>{{.V.ExpiresHours}} 小时</strong>内有效。如果这不是你的账户，忽略这封邮件即可。{{else}}The link works for <strong>{{.V.ExpiresHours}} hours</strong>. If this isn't your account, ignore this e-mail.{{end}}</p>
+    <p style="margin:18px 0 4px;color:#44506a;font-size:15px;line-height:24px;">{{if .ZH}}按钮无法打开时，可以复制这个链接到浏览器：{{else}}If the button does not open, copy this link into your browser:{{end}}</p>
+    <p style="margin:0;font-size:14px;line-height:22px;word-break:break-all;"><a href="{{.V.VerifyURL}}" style="color:#101727;">{{.V.VerifyURL}}</a></p>
+  </td>
+</tr>{{end}}

@@ -1,0 +1,13 @@
+{{define "subject"}}{{if .ZH}}{{.V.OwnerName}} 把 {{.V.Label}} 转移给了你{{else}}{{.V.OwnerName}} transferred {{.V.Label}} to you{{end}}{{end}}
+{{define "preheader"}}{{if .ZH}}你现在是这个账户的所有者。{{else}}You now own this account.{{end}}{{end}}
+{{define "text"}}{{if .ZH}}{{.V.OwnerName}} 把 {{.V.Label}}{{if .V.Account}}（{{.V.Account}}）{{end}} 转移给了你。你现在是这个账户的所有者，可以查看密钥、修改和删除它。
+
+之前的所有者已失去访问权限，原有的共享也已取消。
+
+打开账户列表：
+{{.V.AppURL}}{{else}}{{.V.OwnerName}} transferred {{.V.Label}}{{if .V.Account}} ({{.V.Account}}){{end}} to you. You now own this account: you can see its secret, edit it and delete it.
+
+The previous owner no longer has access, and its previous shares were removed.
+
+Open my accounts:
+{{.V.AppURL}}{{end}}{{end}}

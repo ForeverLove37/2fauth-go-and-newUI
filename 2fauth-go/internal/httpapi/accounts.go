@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"2fauth/internal/mail"
 	"2fauth/internal/otp"
+	"2fauth/internal/services"
 	"2fauth/internal/store"
 )
 
@@ -24,7 +26,8 @@ func (s *Server) accountScope() store.VisibleScope {
 func (s *Server) accountReadPayload(c *ctx, a *store.Account, withOtp bool, at int64) map[string]any {
 	scope := s.accountScope()
 	owned := c.user != nil && a.UserID == c.user.ID
-	borrowed := c.user != nil && !owned && scope.EnableSharing && s.st.IsSharedWith(a.ID, c.user.ID)
+	// Callers only pass accounts the user may see, whichever share made it visible.
+	borrowed := c.user != nil && !owned
 	sharedWithAll := owned && scope.EnableSharing && scope.AllUsersSharingScope && s.st.IsSharedWithAll(a.ID)
 	sharedWithSome := owned && scope.EnableSharing && !sharedWithAll && s.hasExplicitShares(a.ID)
 
@@ -160,7 +163,7 @@ func (s *Server) listAccounts(c *ctx) {
 
 	out := make([]map[string]any, 0, len(accounts))
 	for _, a := range accounts {
-		payload := s.accountReadPayload(c, a, withOtp, at)
+		payload := s.accountReadPayload(c, a, withOtp, boundedAt(a, at))
 		if withOtp && a.OTPType != otp.TypeHOTP {
 			s.logOtpGeneration(c, a, a.OTPType, nil)
 		}
@@ -190,11 +193,32 @@ func (s *Server) showAccount(c *ctx) {
 	if raw := c.query("at"); raw != "" {
 		at, _ = strconv.ParseInt(raw, 10, 64)
 	}
-	payload := s.accountReadPayload(c, a, withOtp, at)
+	payload := s.accountReadPayload(c, a, withOtp, boundedAt(a, at))
+	if withOtp && a.OTPType != otp.TypeHOTP {
+		s.logOtpGeneration(c, a, a.OTPType, nil)
+	}
 	if !withSecret || a.UserID != c.user.ID {
 		delete(payload, "secret")
 	}
 	jsonData(c.w, http.StatusOK, payload)
+}
+
+// boundedAt returns the requested OTP time when it stays within one window of now,
+// and 0 (the current time) otherwise. An arbitrary timestamp would let anyone who can
+// read a code, such as the recipient of a share, compute the codes of the future and
+// keep using them after losing access.
+func boundedAt(a *store.Account, at int64) int64 {
+	if at <= 0 {
+		return 0
+	}
+	window := int64(otp.DefaultPeriod)
+	if a.Period != nil && *a.Period > 0 {
+		window = int64(*a.Period)
+	}
+	if now := time.Now().Unix(); at < now-window || at > now+window {
+		return 0
+	}
+	return at
 }
 
 // storeAccount handles POST /api/v1/twofaccounts.
@@ -211,6 +235,9 @@ func (s *Server) storeAccount(c *ctx) {
 			return
 		}
 		filled, err := s.accountFromURI(uri, v.optional("custom_otp") == otp.TypeSteam)
+		if err == nil {
+			err = validateStored(filled)
+		}
 		if err != nil {
 			msg := "The uri format is invalid."
 			if err == otp.ErrMissingLabel {
@@ -371,8 +398,7 @@ func (s *Server) reorderAccounts(c *ctx) {
 		if err != nil {
 			continue
 		}
-		visible := a.UserID == c.user.ID || s.st.IsSharedWith(id, c.user.ID)
-		if !visible {
+		if !s.canSee(a, c.user.ID) {
 			jsonMessage(c.w, http.StatusForbidden, "Forbidden")
 			return
 		}
@@ -427,13 +453,12 @@ func (s *Server) transferOwnership(c *ctx) {
 		return
 	}
 	v := newValidator(c)
-	password := v.required("confirm_password")
+	password := v.optional("confirm_password")
 	newOwnerID := v.requireInteger("new_owner_id")
 	if v.respond() {
 		return
 	}
-	if !passwordMatches(c.user, password) {
-		jsonMessage(c.w, http.StatusUnauthorized, "unauthorized")
+	if !s.confirmIdentity(c, password) {
 		return
 	}
 	newOwner, err := s.st.GetUser(int64(newOwnerID))
@@ -441,14 +466,32 @@ func (s *Server) transferOwnership(c *ctx) {
 		jsonMessage(c.w, http.StatusNotFound, "not found")
 		return
 	}
+	if newOwner.ID == c.user.ID {
+		jsonResponse(c.w, http.StatusOK, map[string]any{"twofaccount_id": a.ID, "owner_id": newOwner.ID})
+		return
+	}
 	if err := s.st.TransferOwnership(a.ID, newOwner.ID); err != nil {
 		jsonMessage(c.w, http.StatusInternalServerError, "server error")
 		return
 	}
+	s.notifyAccountEvent(mail.KindTransferred, "notifyOnOwnershipTransfer", c.user, newOwner, a)
 	jsonResponse(c.w, http.StatusOK, map[string]any{
 		"twofaccount_id": a.ID,
 		"owner_id":       newOwner.ID,
 	})
+}
+
+// canSee reports whether the user owns the account or currently receives it through
+// a share. Disabling sharing removes the access of every recipient at once.
+func (s *Server) canSee(a *store.Account, userID int64) bool {
+	if a.UserID == userID {
+		return true
+	}
+	scope := s.accountScope()
+	if !scope.EnableSharing {
+		return false
+	}
+	return s.st.IsSharedWith(a.ID, userID) || (scope.AllUsersSharingScope && s.st.IsSharedWithAll(a.ID))
 }
 
 // lookupAccount resolves the {twofaccount} parameter and checks access.
@@ -467,17 +510,14 @@ func (s *Server) lookupAccount(c *ctx, requireOwnership bool) (*store.Account, b
 		jsonMessage(c.w, http.StatusNotFound, "not found")
 		return nil, false
 	}
-	owned := a.UserID == c.user.ID
-	shared := s.accountScope().EnableSharing && s.st.IsSharedWith(a.ID, c.user.ID)
-	sharedAll := s.accountScope().EnableSharing && s.accountScope().AllUsersSharingScope && s.st.IsSharedWithAll(a.ID)
 	if requireOwnership {
-		if !owned {
+		if a.UserID != c.user.ID {
 			jsonMessage(c.w, http.StatusForbidden, "Forbidden")
 			return nil, false
 		}
 		return a, true
 	}
-	if !owned && !shared && !sharedAll {
+	if !s.canSee(a, c.user.ID) {
 		jsonMessage(c.w, http.StatusForbidden, "Forbidden")
 		return nil, false
 	}
@@ -486,7 +526,10 @@ func (s *Server) lookupAccount(c *ctx, requireOwnership bool) (*store.Account, b
 
 // requireIDList validates the ids query parameter.
 func (s *Server) requireIDList(c *ctx) ([]int64, bool) {
-	raw := c.query("ids")
+	return s.requireIDs(c, c.query("ids"))
+}
+
+func (s *Server) requireIDs(c *ctx, raw string) ([]int64, bool) {
 	ids, ok := parseIDList(raw)
 	if !ok {
 		jsonResponse(c.w, http.StatusUnprocessableEntity, map[string]any{
@@ -534,6 +577,9 @@ func (s *Server) otpFromParameters(c *ctx) {
 			return
 		}
 		filled, err := s.accountFromURI(uri, v.optional("custom_otp") == otp.TypeSteam)
+		if err == nil {
+			err = validateStored(filled)
+		}
 		if err != nil {
 			jsonResponse(c.w, http.StatusUnprocessableEntity, map[string]any{
 				"message": "The uri format is invalid.",
@@ -584,16 +630,9 @@ func (s *Server) generateOTPPayload(acc otp.Account, a *store.Account, persist b
 	now := time.Now().Unix()
 
 	if acc.Type == otp.TypeHOTP {
-		code, err := otp.Code(acc, now)
+		code, next, err := s.nextHOTP(&acc, a, now, persist)
 		if err != nil {
 			return nil, err
-		}
-		next := int64(0)
-		if acc.Counter != nil {
-			next = *acc.Counter + 1
-		}
-		if persist && a != nil && a.ID > 0 {
-			_ = s.st.UpdateCounter(a.ID, next)
 		}
 		payload := map[string]any{
 			"password": code,
@@ -635,6 +674,38 @@ func (s *Server) generateOTPPayload(acc otp.Account, a *store.Account, persist b
 		"period":        otp.Period(acc),
 		"next_password": nextCode,
 	}, nil
+}
+
+// nextHOTP computes an HOTP code and moves the counter forward. If another request
+// used the same counter first, the code is computed again from the new value: a
+// counter value, and so a code, is only ever handed out once.
+func (s *Server) nextHOTP(acc *otp.Account, a *store.Account, now int64, persist bool) (string, int64, error) {
+	for attempt := 0; ; attempt++ {
+		code, err := otp.Code(*acc, now)
+		if err != nil {
+			return "", 0, err
+		}
+		current := int64(0)
+		if acc.Counter != nil {
+			current = *acc.Counter
+		}
+		if !persist || a == nil || a.ID <= 0 {
+			return code, current + 1, nil
+		}
+		advanced, err := s.st.AdvanceCounter(a.ID, current, current+1)
+		if err != nil {
+			return "", 0, err
+		}
+		if advanced {
+			return code, current + 1, nil
+		}
+		fresh, err := s.st.GetAccount(a.ID)
+		if err != nil || attempt >= 8 {
+			return "", 0, otp.ErrInvalidParameter
+		}
+		acc.Counter = fresh.Counter
+		a.Counter = fresh.Counter
+	}
 }
 
 // generateTOTPPayload is the read-resource flavour of the OTP payload.
@@ -731,6 +802,21 @@ func (s *Server) accountFromOtp(parsed otp.Account) *store.Account {
 	return acc
 }
 
+// validateStored checks an account built from a URI or an import before it is kept:
+// a value no code can be computed from must be refused now, not fail on every listing.
+func validateStored(a *store.Account) error {
+	return otp.Validate(otp.Account{
+		Type:      a.OTPType,
+		Secret:    a.Secret,
+		Algorithm: a.Algorithm,
+		Digits:    a.Digits,
+		Period:    a.Period,
+		Counter:   a.Counter,
+		Service:   a.Service,
+		Account:   a.Account,
+	})
+}
+
 // accountFromInput validates and builds an account from the advanced form fields.
 func (s *Server) accountFromInput(v *validator) *store.Account {
 	otpType := v.required("otp_type")
@@ -743,6 +829,8 @@ func (s *Server) accountFromInput(v *validator) *store.Account {
 	if strings.Contains(service, ":") {
 		v.fail("service", "The service format is invalid.")
 	}
+	v.maxLen("account", account, otp.MaxLabelLength)
+	v.maxLen("service", service, otp.MaxLabelLength)
 	secret := v.required("secret")
 	secret = otp.SanitizeSecret(secret)
 	if secret != "" {
@@ -772,11 +860,17 @@ func (s *Server) accountFromInput(v *validator) *store.Account {
 		Digits:    digits,
 		Icon:      v.optional("icon"),
 	}
+	if acc.Icon != "" && !services.ValidIconName(acc.Icon) {
+		v.fail("icon", "The icon name is invalid.")
+	}
 
 	if otpType == otp.TypeHOTP {
 		counter, hasCounter := v.integer("counter")
 		if !hasCounter {
 			counter = otp.DefaultCounter
+		}
+		if counter < 0 {
+			v.fail("counter", "The counter must be at least 0.")
 		}
 		c := int64(counter)
 		acc.Counter = &c
@@ -785,6 +879,7 @@ func (s *Server) accountFromInput(v *validator) *store.Account {
 		if !hasPeriod || period <= 0 {
 			period = otp.DefaultPeriod
 		}
+		v.between("period", period, 1, otp.MaxPeriod)
 		acc.Period = &period
 	}
 
@@ -806,54 +901,68 @@ func (s *Server) accountFromInput(v *validator) *store.Account {
 
 // exportAccounts handles GET /api/v1/twofaccounts/export.
 func (s *Server) exportAccounts(c *ctx) {
-	ids, ok := s.requireIDList(c)
+	accounts, ok := s.accountsToExport(c, c.query("ids"))
 	if !ok {
 		return
 	}
-	var accounts []*store.Account
+	if parseBoolInput(c.query("otpauth")) {
+		jsonCollection(c.w, http.StatusOK, otpauthItems(accounts))
+		return
+	}
+	jsonResponse(c.w, http.StatusOK, s.exportDocument(accounts))
+}
+
+// accountsToExport resolves the requested ids. An export contains the secrets, so
+// only the owner may export an account: a share only grants generating its codes.
+func (s *Server) accountsToExport(c *ctx, rawIDs string) ([]*store.Account, bool) {
+	ids, ok := s.requireIDs(c, rawIDs)
+	if !ok {
+		return nil, false
+	}
+	accounts := make([]*store.Account, 0, len(ids))
 	for _, id := range ids {
 		a, err := s.st.GetAccount(id)
 		if err != nil {
 			continue
 		}
-		if a.UserID != c.user.ID && !s.st.IsSharedWith(a.ID, c.user.ID) {
+		if a.UserID != c.user.ID {
 			jsonMessage(c.w, http.StatusForbidden, "Forbidden")
-			return
+			return nil, false
 		}
 		accounts = append(accounts, a)
 	}
+	return accounts, true
+}
 
-	otpauthFormat := parseBoolInput(c.query("otpauth"))
+func otpauthItems(accounts []*store.Account) []map[string]any {
 	items := make([]map[string]any, 0, len(accounts))
 	for _, a := range accounts {
-		if otpauthFormat {
-			items = append(items, map[string]any{"uri": otp.BuildURI(otp.Account{
-				Type:      a.OTPType,
-				Secret:    a.Secret,
-				Algorithm: a.Algorithm,
-				Digits:    a.Digits,
-				Period:    a.Period,
-				Counter:   a.Counter,
-				Service:   a.Service,
-				Account:   a.Account,
-			})})
-			continue
-		}
+		items = append(items, map[string]any{"uri": otp.BuildURI(otp.Account{
+			Type:      a.OTPType,
+			Secret:    a.Secret,
+			Algorithm: a.Algorithm,
+			Digits:    a.Digits,
+			Period:    a.Period,
+			Counter:   a.Counter,
+			Service:   a.Service,
+			Account:   a.Account,
+		})})
+	}
+	return items
+}
+
+// exportDocument builds the export file, following the 2FAuth export schema.
+func (s *Server) exportDocument(accounts []*store.Account) map[string]any {
+	items := make([]map[string]any, 0, len(accounts))
+	for _, a := range accounts {
 		items = append(items, s.accountExportPayload(a))
 	}
-
-	if otpauthFormat {
-		jsonCollection(c.w, http.StatusOK, items)
-		return
+	return map[string]any{
+		"app":      "2fauth_v" + s.cfg.Version,
+		"schema":   1,
+		"datetime": time.Now().UTC().Format("2006-01-02T15:04:05.000000Z"),
+		"data":     items,
 	}
-	jsonResponse(c.w, http.StatusOK, map[string]any{
-		"data": map[string]any{
-			"app":      "2fauth_v" + s.cfg.Version,
-			"schema":   1,
-			"datetime": time.Now().UTC().Format("2006-01-02T15:04:05.000000Z"),
-			"data":     items,
-		},
-	})
 }
 
 // previewAccount handles POST /api/v1/twofaccounts/preview.
@@ -864,6 +973,9 @@ func (s *Server) previewAccount(c *ctx) {
 		return
 	}
 	account, err := s.accountFromURI(uri, v.optional("custom_otp") == otp.TypeSteam)
+	if err == nil {
+		err = validateStored(account)
+	}
 	if err != nil {
 		jsonResponse(c.w, http.StatusUnprocessableEntity, map[string]any{
 			"message": "The uri format is invalid.",
@@ -955,7 +1067,7 @@ func (s *Server) logOtpGeneration(c *ctx, a *store.Account, otpType string, coun
 		OwnerName:      c.user.Name,
 		OwnerEmail:     c.user.Email,
 		TwoFAccountID:  a.ID,
-		IPAddress:      clientIP(c.r),
+		IPAddress:      s.clientIP(c.r),
 		OTPType:        otpType,
 		Counter:        counter,
 		GeneratedAt:    time.Now(),
@@ -971,11 +1083,6 @@ func (s *Server) logOtpGeneration(c *ctx, a *store.Account, otpType string, coun
 	}
 	entry.RequesterID = &c.user.ID
 	_ = s.st.CreateOtpLog(entry)
-}
-
-// passwordMatches verifies a password against the user hash.
-func passwordMatches(u *store.User, password string) bool {
-	return u != nil && verifyPassword(u.Password, password)
 }
 
 var _ = fmt.Sprintf

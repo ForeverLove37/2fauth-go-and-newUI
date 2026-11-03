@@ -9,6 +9,8 @@ func (s *Server) registerRoutes() {
 	s.add(http.MethodPost, "user", s.register)
 	s.add(http.MethodPost, "user/login", s.login)
 	s.add(http.MethodGet, "user/logout", s.logout)
+	s.add(http.MethodPost, "user/logout", s.logout)
+	s.add(http.MethodGet, "user/email/verify", s.verifyEmail)
 	s.add(http.MethodPost, "user/password/lost", s.passwordLost)
 	s.add(http.MethodPost, "user/password/reset", s.passwordReset)
 	s.add(http.MethodGet, "refresh-csrf", s.refreshCSRF)
@@ -33,6 +35,7 @@ func (s *Server) registerRoutes() {
 	s.addAuth(http.MethodPut, "user", s.updateUser)
 	s.addAuth(http.MethodDelete, "user", s.deleteUser)
 	s.addAuth(http.MethodPatch, "user/password", s.updatePassword)
+	s.addAuth(http.MethodPost, "user/email/verification", s.sendEmailVerification)
 
 	// personal access tokens
 	s.addAuth(http.MethodGet, "oauth/personal-access-tokens", s.listPersonalAccessTokens)
@@ -53,6 +56,8 @@ func (s *Server) registerRoutes() {
 	// administration
 	s.addAdmin(http.MethodGet, "system/infos", s.systemInfos)
 	s.addAdmin(http.MethodPost, "system/test-email", s.systemTestEmail)
+	s.addAdmin(http.MethodGet, "api/v1/mail/settings", s.showMailSettings)
+	s.addAdmin(http.MethodPut, "api/v1/mail/settings", s.updateMailSettings)
 	s.addAdmin(http.MethodGet, "system/latestRelease", s.systemLatestRelease)
 	s.addAdmin(http.MethodGet, "system/optimize", s.systemOptimize)
 	s.addAdmin(http.MethodGet, "system/clear-cache", s.systemClearCache)
@@ -85,6 +90,10 @@ func (s *Server) registerRoutes() {
 	s.addAuth(http.MethodPatch, "api/v1/twofaccounts/withdraw", s.withdrawAccounts)
 	s.addAuth(http.MethodPost, "api/v1/twofaccounts/reorder", s.reorderAccounts)
 	s.addAuth(http.MethodPost, "api/v1/twofaccounts/migration", s.migrateAccounts)
+	s.limitBody(importMaxBody)
+	s.addAuth(http.MethodPost, "api/v1/twofaccounts/import", s.importAccounts)
+	s.limitBody(importMaxBody)
+	s.addAuth(http.MethodPost, "api/v1/twofaccounts/export", s.exportEncrypted)
 	s.addAuth(http.MethodPost, "api/v1/twofaccounts/preview", s.previewAccount)
 	s.addAuth(http.MethodGet, "api/v1/twofaccounts/export", s.exportAccounts)
 	s.addAuth(http.MethodGet, "api/v1/twofaccounts/count", s.countAccounts)
@@ -120,6 +129,7 @@ func (s *Server) registerRoutes() {
 
 	// qrcode
 	s.addAuth(http.MethodPost, "api/v1/qrcode/decode", s.decodeQrCode)
+	s.limitBody(uploadMaxBody)
 
 	// icons
 	s.addAuth(http.MethodGet, "api/v1/icons/packs", s.iconPacks)
@@ -127,6 +137,7 @@ func (s *Server) registerRoutes() {
 	s.addAdmin(http.MethodPut, "api/v1/icons/providers", s.updateIconProviders)
 	s.addAuth(http.MethodPost, "api/v1/icons/default", s.iconFetch)
 	s.addAuth(http.MethodPost, "api/v1/icons", s.iconUpload)
+	s.limitBody(uploadMaxBody)
 	s.addAuth(http.MethodDelete, "api/v1/icons/{icon}", s.iconDelete)
 
 	// feature flags
@@ -135,16 +146,16 @@ func (s *Server) registerRoutes() {
 
 	// React panel
 	s.add(http.MethodGet, "api/v1/frontend-config", s.frontendConfig)
-	s.add(http.MethodGet, "assets/{file...}", s.serveUIAsset)
-	s.add(http.MethodGet, "favicon.svg", s.serveUIFavicon)
+	s.addStatic(http.MethodGet, "assets/{file...}", s.serveUIAsset)
+	s.addStatic(http.MethodGet, "favicon.svg", s.serveUIFavicon)
 
 	// static assets (lowest priority: registered last)
-	s.add(http.MethodGet, "build/{file...}", s.serveBuildAsset)
-	s.add(http.MethodGet, "storage/icons/{file...}", s.serveIconRoute)
-	s.add(http.MethodGet, "favicon.ico", s.servePublicFile)
-	s.add(http.MethodGet, "favicon.png", s.servePublicFile)
-	s.add(http.MethodGet, "favicon_lg.png", s.servePublicFile)
-	s.add(http.MethodGet, "logo.svg", s.servePublicFile)
-	s.add(http.MethodGet, "robots.txt", s.servePublicFile)
-	s.add(http.MethodGet, "healthcheck.css", s.servePublicFile)
+	s.addStatic(http.MethodGet, "build/{file...}", s.serveBuildAsset)
+	s.addStatic(http.MethodGet, "storage/icons/{file...}", s.serveIconRoute)
+	s.addStatic(http.MethodGet, "favicon.ico", s.servePublicFile)
+	s.addStatic(http.MethodGet, "favicon.png", s.servePublicFile)
+	s.addStatic(http.MethodGet, "favicon_lg.png", s.servePublicFile)
+	s.addStatic(http.MethodGet, "logo.svg", s.servePublicFile)
+	s.addStatic(http.MethodGet, "robots.txt", s.servePublicFile)
+	s.addStatic(http.MethodGet, "healthcheck.css", s.servePublicFile)
 }
