@@ -1,8 +1,8 @@
-import { Component, useMemo, useRef, type ReactNode } from 'react'
-import { Canvas, useFrame } from '@react-three/fiber'
-import { Float, Grid } from '@react-three/drei'
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { Float, Grid, PerformanceMonitor } from '@react-three/drei'
 import * as THREE from 'three'
-import type { BackgroundStyle } from '../theme/types'
+import type { BackgroundStyle, RenderQuality } from '../theme/types'
 
 interface BackdropProps {
   accent?: string
@@ -10,6 +10,9 @@ interface BackdropProps {
   intensity?: number
   speed?: number
   style?: BackgroundStyle
+  /** frame rate cap, 0 for the refresh rate of the display */
+  fps?: number
+  quality?: RenderQuality
 }
 
 /** Scenery that is pure CSS (no WebGL) so it also works on weak devices. */
@@ -42,6 +45,25 @@ class SceneryBoundary extends Component<{ fallback: ReactNode; children: ReactNo
   render() {
     return this.state.failed ? this.props.fallback : this.props.children
   }
+}
+
+/** Draws the scene at the chosen rate instead of on every frame of the display. */
+function FrameCap({ fps }: { fps: number }) {
+  const invalidate = useThree((state) => state.invalidate)
+  useEffect(() => {
+    let frame = 0
+    let last = 0
+    const interval = 1000 / fps
+    const tick = (now: number) => {
+      frame = requestAnimationFrame(tick)
+      if (now - last < interval - 1) return
+      last = now
+      invalidate()
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [fps, invalidate])
+  return null
 }
 
 /** A slowly drifting particle field. */
@@ -244,7 +266,13 @@ export default function Backdrop({
   intensity = 1,
   speed = 1,
   style = 'grid',
+  fps = 0,
+  quality = 'auto',
 }: BackdropProps) {
+  const maxDpr = Math.min(window.devicePixelRatio || 1, 2)
+  // The scenery lies behind the cards: when frames are late, its resolution gives way
+  // first, because nobody reads it.
+  const [dpr, setDpr] = useState(maxDpr)
   const secondary = light ? '#3f6fd8' : '#6ea8ff'
   const tertiary = light ? '#9a7ae0' : '#b07cff'
 
@@ -258,10 +286,20 @@ export default function Backdrop({
     <SceneryBoundary fallback={plain}>
     <div className="backdrop" aria-hidden data-style={style}>
       <Canvas
-        dpr={[1, 2]}
+        // The context is created once, so a change of quality needs a new canvas.
+        key={quality}
+        dpr={quality === 'performance' ? 1 : quality === 'high' ? maxDpr : dpr}
+        frameloop={fps > 0 ? 'demand' : 'always'}
         camera={{ position: [0, 0.6, 11], fov: 46 }}
-        gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
+        gl={{ antialias: quality !== 'performance', alpha: true, powerPreference: 'high-performance' }}
       >
+        {fps > 0 && <FrameCap fps={fps} />}
+        {quality === 'auto' && (
+          <PerformanceMonitor
+            bounds={(refresh) => (refresh > 90 ? [60, refresh - 5] : [45, 58])}
+            onChange={({ factor }) => setDpr(Math.max(0.6, 0.6 + (maxDpr - 0.6) * factor))}
+          />
+        )}
         <fog attach="fog" args={[light ? '#e6ecfa' : '#05070f', 9, 26]} />
         <ambientLight intensity={0.6} />
         <pointLight position={[4, 5, 4]} intensity={26 * intensity} color={accent} />

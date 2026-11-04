@@ -333,6 +333,35 @@ func (d *DB) schema() []string {
 		`CREATE UNIQUE INDEX IF NOT EXISTS icon_uploads_name_user_unique ON icon_uploads (name, user_id)`,
 		`CREATE INDEX IF NOT EXISTS icon_uploads_user_id_idx ON icon_uploads (user_id)`,
 
+		`CREATE TABLE IF NOT EXISTS ssh_keys (
+			id ` + pk + `,
+			user_id BIGINT NOT NULL,
+			name VARCHAR(255) NOT NULL,
+			public_key ` + t + ` NOT NULL,
+			fingerprint VARCHAR(128) NOT NULL,
+			all_accounts BOOLEAN NOT NULL DEFAULT FALSE,
+			last_used_at BIGINT NULL,
+			last_used_ip VARCHAR(64) NULL,
+			created_at BIGINT NOT NULL,
+			CONSTRAINT ssh_keys_user_id_foreign FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ssh_keys_fingerprint_unique ON ssh_keys (fingerprint)`,
+		`CREATE INDEX IF NOT EXISTS ssh_keys_user_id_idx ON ssh_keys (user_id)`,
+		`CREATE TABLE IF NOT EXISTS ssh_key_accounts (
+			key_id BIGINT NOT NULL,
+			twofaccount_id BIGINT NOT NULL,
+			PRIMARY KEY (key_id, twofaccount_id),
+			CONSTRAINT ssh_key_accounts_key_foreign FOREIGN KEY (key_id) REFERENCES ssh_keys (id) ON DELETE CASCADE,
+			CONSTRAINT ssh_key_accounts_account_foreign FOREIGN KEY (twofaccount_id) REFERENCES twofaccounts (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS ssh_key_groups (
+			key_id BIGINT NOT NULL,
+			group_id BIGINT NOT NULL,
+			PRIMARY KEY (key_id, group_id),
+			CONSTRAINT ssh_key_groups_key_foreign FOREIGN KEY (key_id) REFERENCES ssh_keys (id) ON DELETE CASCADE,
+			CONSTRAINT ssh_key_groups_group_foreign FOREIGN KEY (group_id) REFERENCES "groups" (id) ON DELETE CASCADE
+		)`,
+
 		`CREATE TABLE IF NOT EXISTS migrations (
 			id INTEGER PRIMARY KEY,
 			migration VARCHAR(255) NOT NULL,
@@ -351,6 +380,7 @@ func (d *DB) Migrate() error {
 	// Additive upgrades for databases created by earlier builds.
 	upgrades := []string{
 		`ALTER TABLE "groups" ADD COLUMN show_in_chips BOOLEAN NOT NULL DEFAULT TRUE`,
+		`ALTER TABLE twofaccounts ADD COLUMN icon_opt_out BOOLEAN NOT NULL DEFAULT FALSE`,
 	}
 	for _, stmt := range upgrades {
 		_, _ = d.Exec(stmt) // fails when the column already exists

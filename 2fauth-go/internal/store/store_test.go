@@ -24,7 +24,7 @@ func testDatabases(t *testing.T) map[string]func(t *testing.T) *Store {
 				t.Fatalf("open: %v", err)
 			}
 			t.Cleanup(func() { conn.Close() })
-			for _, table := range []string{"icon_uploads", "user_sessions", "oauth_identities", "oauth_access_tokens", "webauthn_credentials", "auth_logs", "otp_logs",
+			for _, table := range []string{"ssh_key_accounts", "ssh_key_groups", "ssh_keys", "icon_uploads", "user_sessions", "oauth_identities", "oauth_access_tokens", "webauthn_credentials", "auth_logs", "otp_logs",
 				"twofaccount_user_favorites", "twofaccount_user_orders", "twofaccount_shares", "twofaccounts", `"groups"`, "options", "password_resets", "users", "migrations"} {
 				_, _ = conn.Exec(`DROP TABLE IF EXISTS ` + table)
 			}
@@ -298,6 +298,120 @@ func TestStoreAcrossDatabases(t *testing.T) {
 			}
 			if _, err := st.UserFromToken(plain); err == nil {
 				t.Fatal("a token outlived its user")
+			}
+		})
+	}
+}
+
+func TestSSHKeys(t *testing.T) {
+	for name, open := range testDatabases(t) {
+		t.Run(name, func(t *testing.T) {
+			st := open(t)
+			owner, err := st.CreateUser("owner", "owner@example.org", "x")
+			if err != nil {
+				t.Fatal(err)
+			}
+			account, err := st.CreateAccount(&Account{UserID: owner.ID, Service: "GitHub", Account: "a", OTPType: "totp", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "sha1", Digits: 6})
+			if err != nil {
+				t.Fatal(err)
+			}
+			group, err := st.CreateGroup(owner.ID, "work", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, err := st.CreateSSHKey(&SSHKey{UserID: owner.ID, Name: "laptop", PublicKey: "ssh-ed25519 AAAA", Fingerprint: "SHA256:one", AccountIDs: []int64{account.ID}, GroupIDs: []int64{group.ID}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if key.AllAccounts || len(key.AccountIDs) != 1 || len(key.GroupIDs) != 1 || key.LastUsedAt != nil {
+				t.Errorf("created = %+v", key)
+			}
+			if _, err := st.CreateSSHKey(&SSHKey{UserID: owner.ID, Name: "same", PublicKey: "ssh-ed25519 AAAA", Fingerprint: "SHA256:one"}); err == nil {
+				t.Error("a fingerprint was registered twice")
+			}
+			found, err := st.FindSSHKeyByFingerprint("SHA256:one")
+			if err != nil || found.ID != key.ID {
+				t.Fatalf("find = %+v (%v)", found, err)
+			}
+			if _, err := st.FindSSHKeyByFingerprint("SHA256:none"); err != ErrNotFound {
+				t.Errorf("unknown key = %v", err)
+			}
+			if err := st.TouchSSHKey(key.ID, "192.0.2.1"); err != nil {
+				t.Fatal(err)
+			}
+			key.Name, key.AllAccounts, key.AccountIDs, key.GroupIDs = "renamed", true, nil, nil
+			if err := st.UpdateSSHKey(key); err != nil {
+				t.Fatal(err)
+			}
+			fresh, err := st.GetSSHKey(key.ID)
+			if err != nil || fresh.Name != "renamed" || !fresh.AllAccounts || len(fresh.AccountIDs) != 0 || fresh.LastUsedAt == nil || fresh.LastUsedIP != "192.0.2.1" {
+				t.Errorf("updated = %+v (%v)", fresh, err)
+			}
+
+			// A deleted account or group leaves no scope behind.
+			fresh.AllAccounts, fresh.AccountIDs, fresh.GroupIDs = false, []int64{account.ID}, []int64{group.ID}
+			if err := st.UpdateSSHKey(fresh); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.DeleteAccount(account.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.DeleteGroup(group.ID, owner.ID); err != nil {
+				t.Fatal(err)
+			}
+			scoped, err := st.GetSSHKey(key.ID)
+			if err != nil || len(scoped.AccountIDs) != 0 || len(scoped.GroupIDs) != 0 {
+				t.Errorf("scope after deletion = %+v (%v)", scoped, err)
+			}
+
+			// Another user cannot remove it, and deleting the owner does.
+			if removed, err := st.DeleteSSHKey(key.ID, owner.ID+1); err != nil || removed {
+				t.Errorf("removed by another user = %v (%v)", removed, err)
+			}
+			if err := st.DeleteUser(owner.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.GetSSHKey(key.ID); err != ErrNotFound {
+				t.Errorf("key of a deleted user = %v", err)
+			}
+		})
+	}
+}
+
+func TestMissingIcons(t *testing.T) {
+	for name, open := range testDatabases(t) {
+		t.Run(name, func(t *testing.T) {
+			st := open(t)
+			owner, err := st.CreateUser("owner", "owner@example.org", "x")
+			if err != nil {
+				t.Fatal(err)
+			}
+			create := func(service, icon string) *Account {
+				a, err := st.CreateAccount(&Account{UserID: owner.ID, Service: service, Account: "a", Icon: icon, OTPType: "totp", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "sha1", Digits: 6})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return a
+			}
+			missing := create("GitHub", "")
+			create("GitLab", "own.png")
+			create("", "")
+			removed := create("Gitea", "")
+			if err := st.SetIconOptOut(removed.ID, true); err != nil {
+				t.Fatal(err)
+			}
+			list, err := st.AccountsMissingIcon()
+			if err != nil || len(list) != 1 || list[0].ID != missing.ID {
+				t.Fatalf("missing = %+v (%v)", list, err)
+			}
+			if err := st.SetMissingIcon(missing.ID, "found.svg"); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.SetMissingIcon(missing.ID, "later.svg"); err != nil {
+				t.Fatal(err)
+			}
+			if a, _ := st.GetAccount(missing.ID); a.Icon != "found.svg" {
+				t.Errorf("icon = %q", a.Icon)
 			}
 		})
 	}

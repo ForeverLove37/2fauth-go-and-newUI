@@ -121,6 +121,20 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go runJanitor(ctx, st, cfg)
+	go server.RunIconFiller(ctx)
+
+	if cfg.SSHListenAddr != "" {
+		sshListener, err := server.ListenSSH()
+		if err != nil {
+			log.Fatalf("SSH service: %v", err)
+		}
+		go func() {
+			if err := server.ServeSSH(ctx, sshListener); err != nil {
+				slog.Error("SSH service stopped", "error", err)
+			}
+		}()
+		fmt.Printf("SSH service listening on %s\n", sshListener.Addr())
+	}
 
 	useTLS := cfg.TLSCertFile != "" && cfg.TLSKeyFile != ""
 	if (cfg.TLSCertFile != "") != (cfg.TLSKeyFile != "") {

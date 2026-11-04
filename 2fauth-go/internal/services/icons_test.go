@@ -530,9 +530,9 @@ func TestProviderSlugVariants(t *testing.T) {
 		}
 	})
 
-	t.Run("lobehub retries with the -color suffix", func(t *testing.T) {
+	t.Run("lobehub prefers the -color variant", func(t *testing.T) {
 		fake := fakeProvider(t, map[string]fakeResponse{
-			"/gh/lobehub/lobe-icons/packages/static-png/grafana-cloud-color.png": {status: 200, body: string(pngIcon), contentType: "image/png"},
+			"/npm/@lobehub/icons-static-svg/icons/grafana-cloud-color.svg": {status: 200, body: validSVG, contentType: "image/svg+xml"},
 		})
 		svc, settings := iconTestService(t)
 		svc.SetSources(ProviderSources{ProviderLobeHub: fake.URL})
@@ -543,11 +543,8 @@ func TestProviderSlugVariants(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FetchIcon: %v", err)
 		}
-		if !strings.HasSuffix(res.Name, ".png") {
-			t.Errorf("stored name = %q, want a .png file", res.Name)
-		}
-		if res.MimeType != "image/png" {
-			t.Errorf("mime = %q", res.MimeType)
+		if !strings.HasSuffix(res.Name, ".svg") {
+			t.Errorf("stored name = %q, want a .svg file", res.Name)
 		}
 	})
 
@@ -564,4 +561,61 @@ func TestProviderSlugVariants(t *testing.T) {
 			t.Fatalf("FetchIcon: %v", err)
 		}
 	})
+}
+
+func TestIconCandidates(t *testing.T) {
+	first := func(service string) []string {
+		var out []string
+		for _, slugs := range iconCandidates(service) {
+			out = append(out, slugs.slug)
+		}
+		return out
+	}
+	for service, want := range map[string]string{
+		"AWS":              "amazon-web-services,aws",
+		"GitHub":           "github",
+		"github.com":       "github.com,github",
+		"mail.google.com":  "mail.google.com,google",
+		"Google Workspace": "google-workspace,googleworkspace,google",
+		"Bank of America":  "bank-of-america,bankofamerica",
+		"腾讯云":              "tencent",
+		"支付宝":              "alipay",
+		"未知服务":             "",
+		"<script>":         "",
+	} {
+		if got := strings.Join(first(service), ","); got != want {
+			t.Errorf("%s = %q, want %q", service, got, want)
+		}
+	}
+	if len(iconCandidates("Microsoft Office Something Else")) > maxIconCandidates {
+		t.Error("too many candidates")
+	}
+}
+
+func TestFetchIconFollowsAnAlias(t *testing.T) {
+	fake := fakeProvider(t, map[string]fakeResponse{
+		"/gh/selfhst/icons/svg/alipay.svg": {status: 200, body: validSVG, contentType: "image/svg+xml"},
+	})
+	svc, settings := iconTestService(t)
+	svc.SetSources(ProviderSources{ProviderSelfHST: fake.URL})
+	if err := settings.Set(config.SettingIconProviders, "selfhst"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if _, err := svc.FetchIcon(context.Background(), "支付宝"); err != nil {
+		t.Fatalf("FetchIcon: %v", err)
+	}
+}
+
+func TestBestSearchHit(t *testing.T) {
+	slugs := buildIconSlugs("GitHub")
+	prefix, name, ok := bestSearchHit([]string{"line-md:github", "coolicons:github-bulk", "mdi:github", "logos:github-icon"}, slugs)
+	if !ok || prefix != "logos" || name != "github-icon" {
+		t.Errorf("hit = %s:%s %v", prefix, name, ok)
+	}
+	if _, _, ok := bestSearchHit([]string{"mdi:bank", "mdi:github-box"}, slugs); ok {
+		t.Error("an icon named differently was accepted")
+	}
+	if _, _, ok := bestSearchHit([]string{"../x:github", "mdi:git hub"}, slugs); ok {
+		t.Error("an unsafe identifier was accepted")
+	}
 }

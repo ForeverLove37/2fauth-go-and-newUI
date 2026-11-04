@@ -157,6 +157,7 @@ func (s *Server) importAccounts(c *ctx) {
 		owned = append(owned, created)
 		imported++
 	}
+	s.wakeIconFiller()
 	jsonResponse(c.w, http.StatusOK, map[string]any{
 		"total":      len(accounts) + len(issues),
 		"imported":   imported,

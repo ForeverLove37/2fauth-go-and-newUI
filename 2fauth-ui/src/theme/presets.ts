@@ -36,7 +36,7 @@ function preset(
     },
     surface: { radius: 18, blur: 22, cardGradient: true, ...(rest.surface ?? {}) },
     typography: { sans, mono, scale: 1, ...(rest.typography ?? {}) },
-    motion: { enabled: true, duration: 180, autoRotate: false, ...(rest.motion ?? {}) },
+    motion: { enabled: true, duration: 180, autoRotate: false, fps: 0, quality: 'auto', showFps: false, glass: false, ...(rest.motion ?? {}) },
     background: { style: 'grid', intensity: 1, speed: 1, ...(rest.background ?? {}) },
   }
 }

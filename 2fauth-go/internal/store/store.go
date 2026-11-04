@@ -259,6 +259,9 @@ func (s *Store) DeleteUser(id int64) error {
 	if _, err := s.DB.Exec(`DELETE FROM icon_uploads WHERE user_id = ?`, id); err != nil {
 		return err
 	}
+	if err := s.DeleteUserSSHKeys(id); err != nil {
+		return err
+	}
 	_, err := s.DB.Exec(`DELETE FROM users WHERE id = ?`, id)
 	return err
 }

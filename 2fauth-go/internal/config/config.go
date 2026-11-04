@@ -54,6 +54,10 @@ type Config struct {
 	TrustedProxies         string
 	// AllowedClientIPs restricts the addresses allowed to connect at all ("" = any).
 	AllowedClientIPs string
+	// SSHListenAddr is where the command line OTP service listens ("" = disabled).
+	SSHListenAddr string
+	// SSHHostKeyFile holds the host key of that service. It is created when missing.
+	SSHHostKeyFile string
 	// SessionMaxAge is the absolute lifetime of a session, in minutes.
 	SessionMaxAge int
 
@@ -153,8 +157,8 @@ const (
 // order of the provider table: the most specific sets come first and the search
 // based Iconify is the last resort.
 const (
-	DefaultIconProviders        = "selfhst,dashboard,walkx,simpleicons,lobehub,iconify"
-	DefaultIconProviderMaxTries = 3
+	DefaultIconProviders        = "selfhst,dashboard,simpleicons,walkx,lobehub,iconify"
+	DefaultIconProviderMaxTries = 6
 )
 
 // Setting names of the icon provider chain (admin editable, they win over the
@@ -172,7 +176,7 @@ type prefDefault struct {
 
 // preferenceDefaults mirrors $preferences in config/2fauth.php, in declaration order.
 var preferenceDefaults = []prefDefault{
-	{"showOtpAsDot", "USERPREF_DEFAULT__SHOW_OTP_AS_DOT", false},
+	{"showOtpAsDot", "USERPREF_DEFAULT__SHOW_OTP_AS_DOT", true},
 	{"showNextOtp", "USERPREF_DEFAULT__SHOW_NEXT_OTP", true},
 	{"revealDottedOTP", "USERPREF_DEFAULT__REVEAL_DOTTED_OTP", false},
 	{"closeOtpOnCopy", "USERPREF_DEFAULT__CLOSE_OTP_ON_COPY", false},
@@ -325,6 +329,8 @@ func Load(basePath string) *Config {
 	c.ProxyLogoutURL = nullToEmpty(get("PROXY_LOGOUT_URL", ""))
 	c.TrustedProxies = nullToEmpty(get("TRUSTED_PROXIES", ""))
 	c.AllowedClientIPs = nullToEmpty(get("ALLOWED_CLIENT_IPS", ""))
+	c.SSHListenAddr = strings.TrimSpace(nullToEmpty(get("SSH_LISTEN_ADDR", "")))
+	c.SSHHostKeyFile = strings.TrimSpace(nullToEmpty(get("SSH_HOST_KEY_FILE", "")))
 	c.ListenAddr = ":8000"
 	for _, key := range []string{"LISTEN_ADDR", "SERVER_PORT", "PORT"} {
 		if v := strings.TrimSpace(get(key, "")); v != "" {

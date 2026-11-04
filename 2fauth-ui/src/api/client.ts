@@ -10,6 +10,9 @@ import type {
   ShareRecipient,
   User,
   WebAuthnCredential,
+  SshKey,
+  SshKeyInput,
+  SshKeysResponse,
 } from './types'
 
 const API = '/api/v1'
@@ -263,7 +266,14 @@ export const api = {
   iconProviders: () => get<IconProvidersResponse>(`${API}/icons/providers`),
   setIconProviders: (payload: { providers: string[]; max_tries: number }) =>
     put<IconProvidersResponse>(`${API}/icons/providers`, payload),
+  fillIcons: () => post<{ pending: number }>(`${API}/twofaccounts/icons/fill`),
   iconUrl: (icon: string | null) => (icon ? `${BASE}/storage/icons/${encodeURIComponent(icon)}` : ''),
+
+  // SSH keys of the command line service
+  sshKeys: () => get<SshKeysResponse>(`${API}/ssh-keys`),
+  createSshKey: (payload: SshKeyInput & { public_key: string }) => post<SshKey>(`${API}/ssh-keys`, payload),
+  updateSshKey: (id: number, payload: SshKeyInput) => put<SshKey>(`${API}/ssh-keys/${id}`, payload),
+  deleteSshKey: (id: number) => del<void>(`${API}/ssh-keys/${id}`),
 
   // e-mail delivery
   mailSettings: () => get<MailSettings>(`${API}/mail/settings`),

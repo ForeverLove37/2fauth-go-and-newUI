@@ -38,10 +38,20 @@ export interface TypographyConfig {
   scale: number
 }
 
+export type RenderQuality = 'auto' | 'high' | 'performance'
+
 export interface MotionConfig {
   enabled: boolean
   duration: number
   autoRotate: boolean
+  /** frame rate cap of the 3D scenes; 0 follows the refresh rate of the display */
+  fps?: number
+  /** resolution of the 3D scenery: adapt to the load, always sharp, or always light */
+  quality?: RenderQuality
+  /** shows the measured frame rate on the dashboard */
+  showFps?: boolean
+  /** frosted glass on the 3D cards, off by default: it can lower the frame rate */
+  glass?: boolean
 }
 
 export type BackgroundStyle = 'grid' | 'stars' | 'nebula' | 'waves' | 'aurora' | 'bokeh' | 'minimal'

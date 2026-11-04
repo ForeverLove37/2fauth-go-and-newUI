@@ -111,3 +111,31 @@ export interface ApiError extends Error {
   errors?: Record<string, string[]>
   needsPassphrase?: boolean
 }
+
+export interface SshKey {
+  id: number
+  name: string
+  fingerprint: string
+  key_type: string
+  all_accounts: boolean
+  account_ids: number[]
+  group_ids: number[]
+  last_used_at: number | null
+  last_used_ip: string
+  created_at: number
+}
+
+export interface SshKeysResponse {
+  enabled: boolean
+  port?: string
+  host_fingerprint?: string
+  keys: SshKey[]
+}
+
+export interface SshKeyInput {
+  name: string
+  all_accounts: boolean
+  account_ids: string
+  group_ids: string
+  password: string
+}

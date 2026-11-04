@@ -29,8 +29,9 @@
 - 用户注册、登录、密码修改、找回密码、邮箱确认和管理员管理
 - 账户共享及 OTP 生成日志
 - OpenID Connect 登录、PKCE 和 provider discovery
-- 图标上传、删除和可配置的图标 provider chain
-- React 面板中的列表、网格和 3D 展示模式
+- 图标上传、删除和可配置的图标 provider chain；没有图标的账户会在后台自动获取
+- 通过 SSH 公钥在命令行读取验证码，每个密钥有自己的权限范围，详见 [`docs/SSH.md`](2fauth-go/docs/SSH.md)
+- React 面板中的列表、网格和 3D 展示模式；验证码默认隐藏，鼠标移上去显示 5 秒，可一键全部显示
 - 主题编辑、语言切换和本地主题配置
 
 完整的接口兼容性说明见 [`2fauth-go/docs/COMPATIBILITY.md`](2fauth-go/docs/COMPATIBILITY.md)。
@@ -101,6 +102,16 @@ LISTEN_ADDR=127.0.0.1:8000 UI_ASSETS_PATH=../2fauth-ui/dist ./2fauth
 docker build -t 2fauth .
 docker run -p 8000:8000 -v 2fauth-data:/data -e APP_KEY=base64:... -e APP_URL=http://localhost:8000 2fauth
 ```
+
+### 命令行读取验证码
+
+在 `.env` 中设置 `SSH_LISTEN_ADDR=:2222` 并重启，然后在「设置 → 安全 → SSH 密钥」添加机器的公钥，并选择它能读取哪些账户。之后这台机器无需安装任何软件：
+
+```bash
+ssh -p 2222 otp@your-server get github
+```
+
+详见 [docs/SSH.md](2fauth-go/docs/SSH.md)。`ALLOWED_CLIENT_IPS` 同样限制这个端口。
 
 ### 只允许特定地址访问
 

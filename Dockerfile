@@ -21,6 +21,7 @@ COPY --from=ui /src/2fauth-ui/dist /srv/ui
 USER app
 ENV APP_BASE_PATH=/data UI_ASSETS_PATH=/srv/ui LISTEN_ADDR=:8000 DB_CONNECTION=sqlite
 VOLUME /data
-EXPOSE 8000
+# 2222 is only used when SSH_LISTEN_ADDR is set
+EXPOSE 8000 2222
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO /dev/null http://127.0.0.1:8000/up || exit 1
 ENTRYPOINT ["2fauth"]

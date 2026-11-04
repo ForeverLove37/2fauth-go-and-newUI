@@ -59,7 +59,7 @@ const (
 // longer than providerChainBudget.
 const (
 	providerAttemptTimeout = 6 * time.Second
-	providerChainBudget    = 15 * time.Second
+	providerChainBudget    = 25 * time.Second
 	// maxIconBytes caps a downloaded icon (and rejects anything bigger).
 	maxIconBytes = 2 << 20 // 2 MiB
 )
@@ -162,19 +162,6 @@ var providerCatalog = []providerDef{
 	},
 	{
 		Provider: Provider{
-			ID:       ProviderWalkx,
-			Label:    "walkxcode legacy",
-			Source:   "https://github.com/walkxcode/dashboard-icons",
-			Template: "https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/svg/{slug}.svg",
-		},
-		base: "https://cdn.jsdelivr.net",
-		paths: func(s iconSlugs) []string {
-			return []string{"/gh/walkxcode/dashboard-icons/svg/" + s.slug + ".svg"}
-		},
-		variants: []string{"regular"},
-	},
-	{
-		Provider: Provider{
 			ID:       ProviderSimpleIcons,
 			Label:    "Simple Icons",
 			Source:   "https://simpleicons.org/",
@@ -192,17 +179,30 @@ var providerCatalog = []providerDef{
 	},
 	{
 		Provider: Provider{
-			ID:       ProviderLobeHub,
-			Label:    "LobeHub icons",
-			Source:   "https://github.com/lobehub/lobe-icons",
-			Template: "https://cdn.jsdelivr.net/gh/lobehub/lobe-icons/packages/static-png/{slug}.png",
+			ID:       ProviderWalkx,
+			Label:    "walkxcode legacy",
+			Source:   "https://github.com/walkxcode/dashboard-icons",
+			Template: "https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/svg/{slug}.svg",
 		},
 		base: "https://cdn.jsdelivr.net",
 		paths: func(s iconSlugs) []string {
-			// The PNG set ships a monochrome "-color" variant next to the plain
-			// one; retry with it when the plain file is missing.
-			base := "/gh/lobehub/lobe-icons/packages/static-png/"
-			return []string{base + s.slug + ".png", base + s.slug + "-color.png"}
+			return []string{"/gh/walkxcode/dashboard-icons/svg/" + s.slug + ".svg"}
+		},
+		variants: []string{"regular"},
+	},
+	{
+		Provider: Provider{
+			ID:       ProviderLobeHub,
+			Label:    "LobeHub icons",
+			Source:   "https://github.com/lobehub/lobe-icons",
+			Template: "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg/icons/{slug}.svg",
+		},
+		base: "https://cdn.jsdelivr.net",
+		paths: func(s iconSlugs) []string {
+			// jsDelivr refuses the GitHub repository for its size, so the npm package
+			// is used. Most marks have a "-color" variant next to the monochrome one.
+			base := "/npm/@lobehub/icons-static-svg/icons/"
+			return []string{base + s.slug + "-color.svg", base + s.slug + ".svg"}
 		},
 		variants: []string{"regular", "color"},
 	},
@@ -211,7 +211,7 @@ var providerCatalog = []providerDef{
 			ID:       ProviderIconify,
 			Label:    "Iconify search",
 			Source:   "https://iconify.design/",
-			Template: "https://api.iconify.design/search?query={service}&limit=1",
+			Template: "https://api.iconify.design/search?query={service}&limit=64",
 		},
 		base:     "https://api.iconify.design",
 		search:   true,
@@ -456,8 +456,8 @@ func intValue(v any) (int, bool) {
 // It returns ErrIconNotFound when every attempted provider missed, so a total
 // miss is never reported as a server error.
 func (i *IconService) FetchIcon(ctx context.Context, service string) (*IconResult, error) {
-	slugs := buildIconSlugs(service)
-	if slugs.slug == "" {
+	candidates := iconCandidates(service)
+	if len(candidates) == 0 {
 		return nil, ErrIconNotFound
 	}
 	chain := i.Chain()
@@ -470,30 +470,32 @@ func (i *IconService) FetchIcon(ctx context.Context, service string) (*IconResul
 	ctx, cancel := context.WithTimeout(ctx, providerChainBudget)
 	defer cancel()
 
-	for _, id := range chain.Attempts {
-		if ctx.Err() != nil {
-			break
-		}
-		def, ok := providerByID(id)
-		if !ok {
-			continue
-		}
-		body, mime, err := i.fetchProvider(ctx, def, slugs)
-		if err != nil {
-			continue
-		}
-		// Only the winning body is written, and only once it has been fully
-		// received and identified as an image. Third-party SVGs are cleaned too.
-		if mime == svgMime {
-			if body, err = SanitizeSVG(body); err != nil {
+	for _, slugs := range candidates {
+		for _, id := range chain.Attempts {
+			if ctx.Err() != nil {
+				return nil, ErrIconNotFound
+			}
+			def, ok := providerByID(id)
+			if !ok {
 				continue
 			}
+			body, mime, err := i.fetchProvider(ctx, def, slugs)
+			if err != nil {
+				continue
+			}
+			// Only the winning body is written, and only once it has been fully
+			// received and identified as an image. Third-party SVGs are cleaned too.
+			if mime == svgMime {
+				if body, err = SanitizeSVG(body); err != nil {
+					continue
+				}
+			}
+			name, err := i.StoreWithExtension(extensionForContentType(mime), body)
+			if err != nil {
+				return nil, err
+			}
+			return &IconResult{Name: name, Provider: def.ID, MimeType: mime}, nil
 		}
-		name, err := i.StoreWithExtension(extensionForContentType(mime), body)
-		if err != nil {
-			return nil, err
-		}
-		return &IconResult{Name: name, Provider: def.ID, MimeType: mime}, nil
 	}
 	return nil, ErrIconNotFound
 }
@@ -536,7 +538,7 @@ func (i *IconService) fetchBySearch(ctx context.Context, base string, slugs icon
 	}
 	query := url.Values{}
 	query.Set("query", slugs.service)
-	query.Set("limit", "1")
+	query.Set("limit", "64")
 
 	raw, err := i.getBody(ctx, base+"/search?"+query.Encode())
 	if err != nil {
@@ -548,11 +550,8 @@ func (i *IconService) fetchBySearch(ctx context.Context, base string, slugs icon
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, "", fmt.Errorf("icon search answered an invalid payload: %w", err)
 	}
-	if len(payload.Icons) == 0 {
-		return nil, "", errNoIcon
-	}
-	prefix, name, ok := strings.Cut(strings.TrimSpace(payload.Icons[0]), ":")
-	if !ok || !validSearchIdentifier(prefix) || !validSearchIdentifier(name) {
+	prefix, name, ok := bestSearchHit(payload.Icons, slugs)
+	if !ok {
 		return nil, "", errNoIcon
 	}
 

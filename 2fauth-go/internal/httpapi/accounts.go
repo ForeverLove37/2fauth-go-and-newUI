@@ -272,6 +272,7 @@ func (s *Server) storeAccount(c *ctx) {
 		}
 	}
 
+	s.wakeIconFiller()
 	jsonData(c.w, http.StatusCreated, s.accountReadPayload(c, created, false, 0))
 }
 
@@ -299,6 +300,11 @@ func (s *Server) updateAccount(c *ctx) {
 		jsonMessage(c.w, http.StatusInternalServerError, "server error")
 		return
 	}
+	// An icon removed on purpose must not come back on its own.
+	if v.has("icon") {
+		_ = s.st.SetIconOptOut(a.ID, updated.Icon == "")
+	}
+	s.wakeIconFiller()
 
 	if v.has("group_id") {
 		groupRaw := v.optional("group_id")
@@ -1058,30 +1064,35 @@ func (s *Server) accountOtpLogs(c *ctx) {
 
 // logOtpGeneration records an OTP generation event.
 func (s *Server) logOtpGeneration(c *ctx, a *store.Account, otpType string, counter *int64) {
+	s.logOtpFor(c.user, s.clientIP(c.r), a, otpType, counter)
+}
+
+// logOtpFor records an OTP generation event by a user, from any front end.
+func (s *Server) logOtpFor(user *store.User, ip string, a *store.Account, otpType string, counter *int64) {
 	if a == nil || a.ID <= 0 {
 		return
 	}
 	entry := &store.OtpLog{
-		RequesterName:  c.user.Name,
-		RequesterEmail: c.user.Email,
-		OwnerName:      c.user.Name,
-		OwnerEmail:     c.user.Email,
+		RequesterName:  user.Name,
+		RequesterEmail: user.Email,
+		OwnerName:      user.Name,
+		OwnerEmail:     user.Email,
 		TwoFAccountID:  a.ID,
-		IPAddress:      s.clientIP(c.r),
+		IPAddress:      ip,
 		OTPType:        otpType,
 		Counter:        counter,
 		GeneratedAt:    time.Now(),
 	}
-	if a.UserID != c.user.ID {
+	if a.UserID != user.ID {
 		if owner, err := s.st.GetUser(a.UserID); err == nil {
 			entry.OwnerName = owner.Name
 			entry.OwnerEmail = owner.Email
 			entry.OwnerID = &owner.ID
 		}
 	} else {
-		entry.OwnerID = &c.user.ID
+		entry.OwnerID = &user.ID
 	}
-	entry.RequesterID = &c.user.ID
+	entry.RequesterID = &user.ID
 	_ = s.st.CreateOtpLog(entry)
 }
 

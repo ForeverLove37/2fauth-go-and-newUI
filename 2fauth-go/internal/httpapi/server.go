@@ -47,6 +47,12 @@ type Server struct {
 	mailSlots chan struct{}
 	// failedAlerts limits the "failed sign-in" e-mails per account.
 	failedAlerts *throttleStore
+
+	iconFill *iconFiller
+
+	sshFailures        *throttleStore
+	sshMu              sync.RWMutex
+	sshHostFingerprint string
 }
 
 // Options configures a Server.
@@ -98,6 +104,8 @@ func New(opts Options) (*Server, error) {
 		allowedClients: allowed,
 		mailSlots:      make(chan struct{}, 4),
 		failedAlerts:   newThrottleStore(),
+		iconFill:       newIconFiller(),
+		sshFailures:    newThrottleStore(),
 	}
 	s.registerRoutes()
 	return s, nil

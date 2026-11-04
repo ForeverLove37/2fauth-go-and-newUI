@@ -1,13 +1,10 @@
 import type { Account } from '../api/types'
 import { t } from '../i18n'
 
-/** Seconds left in the current TOTP window. */
+/** Seconds left in the current TOTP window. Windows are aligned on the Unix epoch. */
 export function remainingSeconds(account: Account, now: number): number {
-  const otp = account.otp
-  if (!otp || !account.period) return 0
-  const generatedAt = otp.generated_at ?? Math.floor(now / 1000)
-  const elapsed = Math.floor(now / 1000) - generatedAt
-  return Math.max(0, account.period - (elapsed % account.period))
+  if (!account.otp || !account.period) return 0
+  return account.period - (Math.floor(now / 1000) % account.period)
 }
 
 /** Progress of the current window, between 0 and 1. */
@@ -16,11 +13,40 @@ export function otpProgress(account: Account, now: number): number {
   return remainingSeconds(account, now) / account.period
 }
 
-/** The code to display, masked when the preference asks for it. */
-export function displayCode(account: Account, dots: boolean, revealed: boolean): string {
-  const code = account.otp?.password ?? '•'.repeat(account.digits || 6)
-  if (!dots || revealed) return code
-  return '•'.repeat(code.length)
+/**
+ * The code that is valid now. Between two refreshes the window can roll over, and
+ * the code loaded for the next window is the right one from that moment on.
+ */
+export function currentCode(account: Account, now: number): string {
+  const otp = account.otp
+  if (!otp?.password) return ''
+  const { period } = account
+  if (period && otp.generated_at && otp.next_password) {
+    if (Math.floor(now / 1000 / period) > Math.floor(otp.generated_at / period)) return otp.next_password
+  }
+  return otp.password
+}
+
+/** What stands for a hidden code. */
+export const MASK = '*'
+
+/** A mask as long as the code of this account. */
+export function maskedCode(account: Account): string {
+  return MASK.repeat(account.otp?.password?.length || account.digits || 6)
+}
+
+/**
+ * A stable hue per service, so that a wall of cards is not a wall of the same card.
+ * The same service keeps its colour wherever it is shown.
+ */
+export function identityHue(account: Account): number {
+  const source = (account.service || account.account || String(account.id)).toLowerCase()
+  let hash = 0
+  for (let index = 0; index < source.length; index += 1) {
+    hash = (hash * 31 + source.charCodeAt(index)) >>> 0
+  }
+  // the golden ratio spreads similar names over the wheel
+  return Math.round((hash * 0.61803398875 * 360) % 360)
 }
 
 /** Initials used by the avatar placeholder. */

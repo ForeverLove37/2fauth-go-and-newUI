@@ -112,8 +112,8 @@ func TestIconProvidersEndpoint(t *testing.T) {
 	}
 	payload := jsonBody(t, rec)
 
-	if payload["max_tries"] != float64(3) {
-		t.Errorf("max_tries = %v, want 3", payload["max_tries"])
+	if payload["max_tries"] != float64(services.ProviderCount) {
+		t.Errorf("max_tries = %v, want %d", payload["max_tries"], services.ProviderCount)
 	}
 	providers, _ := payload["providers"].([]any)
 	if len(providers) != services.ProviderCount {
@@ -125,12 +125,12 @@ func TestIconProvidersEndpoint(t *testing.T) {
 	}
 
 	wantOrder := map[string]float64{
-		"selfhst": 1, "dashboard": 2, "walkx": 3,
-		"simpleicons": 4, "lobehub": 5, "iconify": 6,
+		"selfhst": 1, "dashboard": 2, "simpleicons": 3,
+		"walkx": 4, "lobehub": 5, "iconify": 6,
 	}
 	wantStatus := map[string]string{
 		"selfhst": "available", "dashboard": "available", "walkx": "available",
-		"simpleicons": "skipped", "lobehub": "skipped", "iconify": "skipped",
+		"simpleicons": "available", "lobehub": "available", "iconify": "available",
 	}
 	for _, raw := range providers {
 		p, _ := raw.(map[string]any)

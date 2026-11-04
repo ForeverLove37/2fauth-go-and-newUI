@@ -7,6 +7,7 @@ import ThemeEditor from './ThemeEditor'
 import IconProvidersPanel from '../components/IconProvidersPanel'
 import SsoSettingsPanel from '../components/SsoSettingsPanel'
 import MailSettingsPanel from '../components/MailSettingsPanel'
+import SshKeysPanel from '../components/SshKeysPanel'
 import { useI18nStore, useT } from '../i18n'
 import { useStore } from '../store/useStore'
 
@@ -151,9 +152,9 @@ function OptionsTab({
         </div>
 
         <Toggle
-          label={t('Hide codes as dots')}
-          hint={t('Codes are masked until you reveal or copy them')}
-          value={Boolean(prefs.showOtpAsDot)}
+          label={t('Hide codes')}
+          hint={t('Codes appear for 5 seconds when the mouse moves onto them. Copying works either way.')}
+          value={prefs.showOtpAsDot !== false}
           disabled={isLocked('showOtpAsDot')}
           onChange={(value) => void setPreference('showOtpAsDot', value)}
         />
@@ -176,6 +177,13 @@ function OptionsTab({
           value={Boolean(prefs.showAccountsIcons)}
           disabled={isLocked('showAccountsIcons')}
           onChange={(value) => void setPreference('showAccountsIcons', value)}
+        />
+        <Toggle
+          label={t('Fetch official icons')}
+          hint={t('Accounts without an icon get one from the icon libraries. This tells them the name of the service.')}
+          value={prefs.getOfficialIcons !== false}
+          disabled={isLocked('getOfficialIcons')}
+          onChange={(value) => void setPreference('getOfficialIcons', value)}
         />
         <Toggle
           label={t('Group chips')}
@@ -360,6 +368,7 @@ function SecurityTab() {
 
   return (
     <div className="stack">
+      <SshKeysPanel />
       <div className="panel">
         <div className="panel-head">
           <div>

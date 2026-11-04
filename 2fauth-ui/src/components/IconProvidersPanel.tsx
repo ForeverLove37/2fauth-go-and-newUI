@@ -73,6 +73,15 @@ export default function IconProvidersPanel() {
     }
   }
 
+  async function fillNow() {
+    try {
+      const { pending } = await api.fillIcons()
+      toast('success', pending ? t('Looking for {count} icons in the background', { count: pending }) : t('Every account has an icon'))
+    } catch (error) {
+      toast('error', (error as Error).message)
+    }
+  }
+
   const enabledCount = providers.filter((item) => item.enabled).length
 
   return (
@@ -153,6 +162,9 @@ export default function IconProvidersPanel() {
 
         <button className="btn primary small" onClick={save} disabled={busy} style={{ marginTop: 10 }}>
           <Icon name="check" size={14} /> {t('Save libraries')}
+        </button>
+        <button className="btn ghost small" onClick={() => void fillNow()} style={{ marginTop: 10, marginLeft: 8 }}>
+          <Icon name="refresh" size={14} /> {t('Fetch missing icons now')}
         </button>
       </div>
     </div>

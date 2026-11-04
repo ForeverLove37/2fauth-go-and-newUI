@@ -4,7 +4,7 @@ import { download, stamp } from '../lib/format'
 import { fontChoices, monoChoices, previewStyle } from '../theme/apply'
 import { presets } from '../theme/presets'
 import { useThemeStore } from '../theme/store'
-import type { BackgroundStyle, ThemeConfig } from '../theme/types'
+import type { BackgroundStyle, RenderQuality, ThemeConfig } from '../theme/types'
 import { useT } from '../i18n'
 import { useStore } from '../store/useStore'
 
@@ -257,6 +257,39 @@ export default function ThemeEditor() {
             <Toggle label={t("Enable transitions")} value={theme.motion.enabled} onChange={(value) => patchMotion({ enabled: value })} />
             <Slider label={t("Transition duration")} value={theme.motion.duration} min={0} max={600} step={10} suffix="ms" onChange={(value) => patchMotion({ duration: value })} />
             <Toggle label={t("Auto-rotate the 3D stage")} value={theme.motion.autoRotate} onChange={(value) => patchMotion({ autoRotate: value })} />
+            <div className="color-row">
+              <label>{t('3D frame rate')}</label>
+              <select
+                className="select"
+                value={theme.motion.fps ?? 0}
+                onChange={(event) => patchMotion({ fps: Number(event.target.value) })}
+              >
+                <option value={0}>{t('Match the display (highest)')}</option>
+                {[240, 165, 144, 120, 90, 60, 30].map((fps) => (
+                  <option key={fps} value={fps}>
+                    {t('Up to {fps} FPS', { fps })}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="color-row">
+              <label>{t('3D scenery quality')}</label>
+              <select
+                className="select"
+                value={theme.motion.quality ?? 'auto'}
+                onChange={(event) => patchMotion({ quality: event.target.value as RenderQuality })}
+              >
+                <option value="auto">{t('Automatic (keeps the frame rate up)')}</option>
+                <option value="high">{t('Always sharp')}</option>
+                <option value="performance">{t('Performance (highest frame rate)')}</option>
+              </select>
+            </div>
+            <Toggle label={t('Frosted glass on 3D cards')} value={theme.motion.glass ?? false} onChange={(value) => patchMotion({ glass: value })} />
+            <Toggle label={t('Show the frame rate')} value={theme.motion.showFps ?? false} onChange={(value) => patchMotion({ showFps: value })} />
+            <p className="hint">{t('Frosted glass can lower the frame rate, more so with many cards. Its strength follows the backdrop blur setting.')}</p>
+            <p className="hint">
+              {t('A browser never draws faster than the refresh rate of the display, so 144 FPS needs a 144 Hz monitor enabled in the system settings.')}
+            </p>
           </div>
         </div>
 

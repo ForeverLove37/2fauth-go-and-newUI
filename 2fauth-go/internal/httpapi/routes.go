@@ -42,6 +42,12 @@ func (s *Server) registerRoutes() {
 	s.addAuth(http.MethodPost, "oauth/personal-access-tokens", s.createPersonalAccessToken)
 	s.addAuth(http.MethodDelete, "oauth/personal-access-tokens/{token_id}", s.deletePersonalAccessToken)
 
+	// SSH keys of the command line service
+	s.addAuth(http.MethodGet, "api/v1/ssh-keys", s.listSSHKeys)
+	s.addAuth(http.MethodPost, "api/v1/ssh-keys", s.createSSHKey)
+	s.addAuth(http.MethodPut, "api/v1/ssh-keys/{key}", s.updateSSHKey)
+	s.addAuth(http.MethodDelete, "api/v1/ssh-keys/{key}", s.deleteSSHKey)
+
 	// webauthn
 	s.add(http.MethodPost, "webauthn/login/options", s.webauthnLoginOptions)
 	s.add(http.MethodPost, "webauthn/login", s.webauthnLogin)
@@ -98,6 +104,7 @@ func (s *Server) registerRoutes() {
 	s.addAuth(http.MethodGet, "api/v1/twofaccounts/export", s.exportAccounts)
 	s.addAuth(http.MethodGet, "api/v1/twofaccounts/count", s.countAccounts)
 	s.addAuth(http.MethodPost, "api/v1/twofaccounts/otp", s.otpFromParameters)
+	s.addAuth(http.MethodPost, "api/v1/twofaccounts/icons/fill", s.fillMissingIcons)
 	s.addAuth(http.MethodGet, "api/v1/twofaccounts", s.listAccounts)
 	s.addAuth(http.MethodPost, "api/v1/twofaccounts", s.storeAccount)
 	s.addAuth(http.MethodGet, "api/v1/twofaccounts/{twofaccount}/qrcode", s.accountQrCode)

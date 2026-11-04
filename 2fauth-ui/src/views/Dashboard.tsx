@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { Account } from '../api/types'
 import AccountModal from '../components/AccountModal'
-import { AccountCard } from '../components/AccountCard'
+import { AccountCard, CardAvatar, LiveCode } from '../components/AccountCard'
+import SortableGrid from '../components/SortableGrid'
 import { GroupsModal, ImportExportModal } from '../components/Transfer'
 import Icon from '../components/Icon'
 import { useT } from '../i18n'
-import { accountLabel, accountSubLabel, copyText, displayCode, initials, remainingSeconds } from '../lib/format'
-import { usePolling, useTick } from '../lib/hooks'
+import { accountLabel, accountSubLabel, copyText, currentCode, maskedCode, remainingSeconds } from '../lib/format'
+import { usePolling, useSecond, useTimedReveal } from '../lib/hooks'
 import Stage3D from '../stage/Stage3D'
 import type { StageLayout } from '../stage/layouts'
 import { useStore } from '../store/useStore'
@@ -41,6 +42,58 @@ const sceneryLabel: Record<BackgroundStyle, string> = {
   minimal: 'Minimal',
 }
 
+/** A code outside a card: hidden like the others, shown when the mouse moves onto it. */
+function InlineCode({
+  account,
+  masked,
+  className,
+  title,
+  onClick,
+}: {
+  account: Account
+  masked: boolean
+  className: string
+  title?: string
+  onClick?: (event: React.MouseEvent) => void
+}) {
+  const { revealed, handlers } = useTimedReveal()
+  const hidden = masked && !revealed
+  return (
+    <button className={`${className}${hidden ? ' dots' : ''}`} onClick={onClick} title={title} {...handlers}>
+      {hidden ? maskedCode(account) : <LiveCode account={account} />}
+    </button>
+  )
+}
+
+/** Seconds left of the selected account. */
+function FocusCountdown({ account }: { account: Account }) {
+  const t = useT()
+  const now = useSecond()
+  return <>{account.otp_type === 'hotp' ? t('counter') : `${remainingSeconds(account, now)}s`}</>
+}
+
+/** The rate the browser is really drawing at. */
+function FpsMeter() {
+  const [fps, setFps] = useState(0)
+  useEffect(() => {
+    let frame = 0
+    let count = 0
+    let start = performance.now()
+    const tick = (now: number) => {
+      count += 1
+      if (now - start >= 500) {
+        setFps(Math.round((count * 1000) / (now - start)))
+        count = 0
+        start = now
+      }
+      frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [])
+  return <span className="fps-meter mono">{fps} FPS</span>
+}
+
 function loadMode(): ViewMode {
   const stored = localStorage.getItem(MODE_KEY) as ViewMode | null
   if (stored && modes.includes(stored)) return stored
@@ -59,11 +112,13 @@ export default function Dashboard() {
   const loadAccounts = useStore((state) => state.loadAccounts)
   const loadGroups = useStore((state) => state.loadGroups)
   const toggleFavorite = useStore((state) => state.toggleFavorite)
+  const locked = useStore((state) => state.locked)
+  const setPreference = useStore((state) => state.setPreference)
   const themeAutoRotate = useThemeStore((state) => state.theme.motion.autoRotate)
+  const motion = useThemeStore((state) => state.theme.motion)
   const background = useThemeStore((state) => state.theme.background)
   const patchBackground = useThemeStore((state) => state.patchBackground)
 
-  const now = useTick(250)
   const [mode, setMode] = useState<ViewMode>(() => loadMode())
   const [autoRotate, setAutoRotate] = useState<boolean>(() => {
     const stored = localStorage.getItem(ROTATE_KEY)
@@ -75,12 +130,14 @@ export default function Dashboard() {
   const [creating, setCreating] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
   const [groupsOpen, setGroupsOpen] = useState(false)
-  const [draft, setDraft] = useState<number[] | null>(null)
-  const dragRef = useRef<{ id: number; startX: number; startY: number; moved: boolean } | null>(null)
+  // the card enlarged in the 3D modes
+  const [focusedId, setFocusedId] = useState<number | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const dots = Boolean(prefs.showOtpAsDot)
+  // Hidden unless the user chose otherwise, also while the preferences are loading.
+  const dots = prefs.showOtpAsDot !== false
   const showNext = prefs.showNextOtp !== false
+  const showIcons = prefs.showAccountsIcons !== false
 
   useEffect(() => {
     localStorage.setItem(MODE_KEY, mode)
@@ -110,15 +167,6 @@ export default function Dashboard() {
     })
   }, [accounts, groupFilter, query])
 
-  // the grid is reorderable, so it renders from a draft order while dragging
-  const ordered = useMemo(() => {
-    if (!draft) return visible
-    const byId = new Map(visible.map((account) => [account.id, account]))
-    const result = draft.map((id) => byId.get(id)).filter((account): account is Account => Boolean(account))
-    for (const account of visible) if (!draft.includes(account.id)) result.push(account)
-    return result
-  }, [draft, visible])
-
   const selected = visible.find((account) => account.id === selectedId) ?? visible[0] ?? null
   const canReorder = mode === 'grid' && groupFilter === 'all' && query.trim() === '' && visible.length > 1
 
@@ -126,9 +174,17 @@ export default function Dashboard() {
     if (selected && selected.id !== selectedId) select(selected.id)
   }, [selected, selectedId, select])
 
+  const is3D = mode === 'orbit' || mode === 'helix' || mode === 'wall' || mode === 'sphere'
+
+  // A focused card that is filtered away, or a change of mode, ends the focus.
+  useEffect(() => {
+    if (focusedId !== null && (!is3D || !visible.some((account) => account.id === focusedId))) setFocusedId(null)
+  }, [focusedId, is3D, visible])
+
   async function copy(account: Account | null) {
-    if (!account?.otp?.password) return
-    const ok = await copyText(account.otp.password)
+    const code = account ? currentCode(account, Date.now()) : ''
+    if (!account || !code) return
+    const ok = await copyText(code)
     toast(
       ok ? 'success' : 'error',
       ok ? t('Code copied for {name}', { name: accountLabel(account) }) : t('Could not copy the code'),
@@ -140,7 +196,7 @@ export default function Dashboard() {
     try {
       const payload = await api.otp(account.id)
       await copyText(payload.password)
-      toast('success', t('New counter code {code}', { code: payload.password }))
+      toast('success', dots ? t('New counter code copied') : t('New counter code {code}', { code: payload.password }))
       await loadAccounts(true)
     } catch {
       toast('error', t('Could not generate a new code'))
@@ -153,64 +209,32 @@ export default function Dashboard() {
     patchBackground({ style: next })
   }
 
-  // drag to reorder the grid, like moving icons on a home screen
-  function beginDrag(event: React.PointerEvent, account: Account) {
-    if (!canReorder || (event.pointerType === 'mouse' && event.button !== 0)) return
-    dragRef.current = { id: account.id, startX: event.clientX, startY: event.clientY, moved: false }
-    setDraft(visible.map((item) => item.id))
-  }
-
-  useEffect(() => {
-    if (!draft) return
-
-    function onMove(event: PointerEvent) {
-      const drag = dragRef.current
-      if (!drag) return
-      if (!drag.moved && Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY) < 8) return
-      drag.moved = true
-      const target = document
-        .elementFromPoint(event.clientX, event.clientY)
-        ?.closest('[data-account-id]') as HTMLElement | null
-      if (!target) return
-      const targetId = Number(target.dataset.accountId)
-      if (!targetId || targetId === drag.id) return
-      setDraft((current) => {
-        if (!current) return current
-        const from = current.indexOf(drag.id)
-        const to = current.indexOf(targetId)
-        if (from < 0 || to < 0 || from === to) return current
-        const next = [...current]
-        next.splice(from, 1)
-        next.splice(to, 0, drag.id)
-        return next
-      })
-    }
-
-    async function onUp() {
-      const drag = dragRef.current
-      dragRef.current = null
-      const order = draft
-      setDraft(null)
-      if (!drag?.moved || !order) return
+  const reorder = useCallback(
+    async (ids: number[]) => {
+      // The new order holds on screen while it is being saved.
+      const byId = new Map(useStore.getState().accounts.map((account) => [account.id, account]))
+      useStore.setState({ accounts: ids.map((id) => byId.get(id)).filter((account): account is Account => Boolean(account)) })
       try {
-        await api.reorderAccounts(order)
+        await api.reorderAccounts(ids)
         toast('success', t('New order saved'))
       } catch {
         toast('error', t('Could not save the new order'))
       } finally {
         void loadAccounts(true)
       }
-    }
+    },
+    [loadAccounts, toast, t],
+  )
 
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
-    return () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
-    }
-  }, [draft, loadAccounts, toast, t])
+  const onCardSelect = useCallback(
+    (id: number) => {
+      select(id)
+      setFocusedId((current) => (current === id ? null : id))
+    },
+    [select],
+  )
+  const onCardCopy = useCallback((message: string) => toast('success', message), [toast])
+  const onCardFavorite = useCallback((id: number) => void toggleFavorite(id), [toggleFavorite])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -221,12 +245,21 @@ export default function Dashboard() {
       }
       if (event.metaKey || event.ctrlKey) return
       const index = visible.findIndex((account) => account.id === selected?.id)
+      const step = (delta: number) => {
+        if (!visible.length) return
+        const next = visible[(index + delta + visible.length) % visible.length].id
+        select(next)
+        if (focusedId !== null) setFocusedId(next)
+      }
       switch (event.key) {
         case 'ArrowRight':
-          if (visible.length) select(visible[(index + 1 + visible.length) % visible.length].id)
+          step(1)
           break
         case 'ArrowLeft':
-          if (visible.length) select(visible[(index - 1 + visible.length) % visible.length].id)
+          step(-1)
+          break
+        case 'Escape':
+          setFocusedId(null)
           break
         case 'c':
           void copy(selected)
@@ -266,18 +299,17 @@ export default function Dashboard() {
       key={account.id}
       account={account}
       selected={account.id === selected?.id}
-      now={now}
       dots={dots}
       showNext={showNext}
-      onSelect={() => select(account.id)}
-      onCopy={(message) => toast('success', message)}
-      onFavorite={() => void toggleFavorite(account.id)}
-      onOpen={() => setEditing(account)}
+      showIcon={showIcons}
+      onSelect={is3D ? onCardSelect : select}
+      onCopy={onCardCopy}
+      onFavorite={onCardFavorite}
+      onOpen={setEditing}
     />
   )
 
-  const is3D = mode === 'orbit' || mode === 'helix' || mode === 'wall' || mode === 'sphere'
-  const dragging = draft !== null && dragRef.current?.moved === true
+  const focusIndex = focusedId === null ? -1 : visible.findIndex((account) => account.id === focusedId)
 
   return (
     <div className="stage">
@@ -349,6 +381,18 @@ export default function Dashboard() {
             <Icon name="orbit" size={13} /> {t('Scenery')}: {t(sceneryLabel[background?.style ?? 'grid'])}
           </button>
 
+          <button
+            className={`chip${dots ? '' : ' active'}`}
+            disabled={locked.includes('showOtpAsDot')}
+            aria-pressed={!dots}
+            onClick={() => void setPreference('showOtpAsDot', !dots)}
+            title={dots ? t('Show every code in clear text') : t('Hide every code again')}
+          >
+            <Icon name={dots ? 'eye' : 'eye-off'} size={13} /> {dots ? t('Show all codes') : t('Hide all codes')}
+          </button>
+
+          {is3D && motion.showFps && <FpsMeter />}
+
           <div className="right flex">
             <button className="btn small ghost" onClick={() => setCreating(true)}>
               <Icon name="plus" size={14} /> {t('New account')}
@@ -372,21 +416,19 @@ export default function Dashboard() {
             layout={mode}
             count={visible.length}
             autoRotate={autoRotate}
+            fps={motion.fps ?? 0}
+            focusIndex={focusIndex >= 0 ? focusIndex : null}
+            onBackgroundClick={() => setFocusedId(null)}
             items={visible.map((account) => cardFor(account))}
           />
         ) : mode === 'grid' ? (
-          <div className={`grid2d${canReorder ? ' reorderable' : ''}${dragging ? ' dragging' : ''}`}>
-            {ordered.map((account) => (
-              <div
-                className={`grid2d-cell${draft?.includes(account.id) ? ' draggable' : ''}`}
-                key={account.id}
-                data-account-id={account.id}
-                onPointerDown={(event) => beginDrag(event, account)}
-              >
-                {cardFor(account)}
-              </div>
-            ))}
-          </div>
+          <SortableGrid
+            accounts={visible}
+            enabled={canReorder}
+            animate={motion.enabled}
+            renderCard={cardFor}
+            onReorder={reorder}
+          />
         ) : (
           <div className="list-mode">
             {visible.map((account) => (
@@ -396,14 +438,21 @@ export default function Dashboard() {
                 onClick={() => select(account.id)}
                 onDoubleClick={() => setEditing(account)}
               >
-                <div className="card-avatar">
-                  {account.icon ? <img src={api.iconUrl(account.icon)} alt="" /> : initials(account)}
-                </div>
+                <CardAvatar account={account} showIcon={showIcons} />
                 <div className="grow">
                   <strong>{accountLabel(account)}</strong>
                   <div className="hint">{accountSubLabel(account)}</div>
                 </div>
-                <div className="otp-cell">{account.otp?.password ?? '——'}</div>
+                <InlineCode
+                  account={account}
+                  masked={dots}
+                  className="otp-cell"
+                  title={t('Click to copy')}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void copy(account)
+                  }}
+                />
                 <div className="flex">
                   <button
                     className={`icon-btn${account.is_favorite ? ' on' : ''}`}
@@ -434,19 +483,21 @@ export default function Dashboard() {
         <div className="focus-bar">
           {selected ? (
             <>
-              <div className="card-avatar" style={{ width: 46, height: 46 }}>
-                {selected.icon ? <img src={api.iconUrl(selected.icon)} alt="" /> : initials(selected)}
-              </div>
+              <CardAvatar account={selected} showIcon={showIcons} size={46} />
               <div className="meta grow">
                 <strong>{accountLabel(selected)}</strong>
                 <span>
-                  {accountSubLabel(selected)} ·{' '}
-                  {selected.otp_type === 'hotp' ? t('counter') : `${remainingSeconds(selected, now)}s`}
+                  {accountSubLabel(selected)} · <FocusCountdown account={selected} />
                 </span>
               </div>
-              <button className={`focus-otp${dots ? ' dots' : ''}`} onClick={() => void copy(selected)} title={t('Click to copy')}>
-                {displayCode(selected, false, true)}
-              </button>
+              <InlineCode
+                key={selected.id}
+                account={selected}
+                masked={dots}
+                className="focus-otp"
+                title={t('Click to copy')}
+                onClick={() => void copy(selected)}
+              />
               <div className="flex">
                 <button className="btn small primary" onClick={() => void copy(selected)}>
                   <Icon name="copy" size={14} /> {t('Copy')}

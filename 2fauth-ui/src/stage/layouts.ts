@@ -37,16 +37,20 @@ export function layoutPoint(layout: StageLayout, index: number, count: number): 
 
   switch (layout) {
     case 'orbit': {
-      const radius = clampRadius(n, 260, 520)
-      const angle = (index / n) * Math.PI * 2 - Math.PI / 2
-      return { x: Math.cos(angle) * radius, y: 0, z: Math.sin(angle) * radius }
+      // Past a dozen cards a single ring only stacks them: rings are added instead.
+      const perRing = 14
+      const rings = Math.ceil(n / perRing)
+      const ring = Math.floor(index / perRing)
+      const inRing = ring < rings - 1 ? perRing : n - perRing * (rings - 1)
+      const radius = clampRadius(inRing, 260, 620)
+      const angle = ((index % perRing) / inRing) * Math.PI * 2 - Math.PI / 2 + ring * 0.37
+      return { x: Math.cos(angle) * radius, y: (ring - (rings - 1) / 2) * 230, z: Math.sin(angle) * radius }
     }
     case 'helix': {
-      const radius = clampRadius(n, 230, 430)
-      const turns = Math.max(1, Math.round(n / 5))
-      const angle = (index / n) * Math.PI * 2 * turns
-      const spacing = Math.min(160, Math.max(96, 900 / n))
-      const y = (index - (n - 1) / 2) * spacing
+      const perTurn = Math.max(5, Math.round(n / 6))
+      const radius = Math.max(230, (perTurn * 320) / (Math.PI * 2))
+      const angle = (index / perTurn) * Math.PI * 2
+      const y = (index - (n - 1) / 2) * Math.max(220 / perTurn, n < 8 ? 96 : 0)
       return { x: Math.cos(angle) * radius, y, z: Math.sin(angle) * radius }
     }
     case 'wall': {
@@ -62,7 +66,8 @@ export function layoutPoint(layout: StageLayout, index: number, count: number): 
       return { x, y, z }
     }
     case 'sphere': {
-      const radius = clampRadius(n, 300, 460)
+      // enough surface for every card
+      const radius = Math.max(300, Math.sqrt((n * 62000) / (Math.PI * 4)))
       const y = n === 1 ? 0 : 1 - (index / (n - 1)) * 2
       const ring = Math.sqrt(Math.max(0, 1 - y * y))
       const theta = index * GOLDEN

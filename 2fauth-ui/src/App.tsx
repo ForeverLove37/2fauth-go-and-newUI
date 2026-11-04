@@ -37,6 +37,7 @@ export default function App() {
   const themeBase = useThemeStore((state) => state.theme.base)
   const accent = useThemeStore((state) => state.theme.palette.accent)
   const background = useThemeStore((state) => state.theme.background)
+  const motion = useThemeStore((state) => state.theme.motion)
   const navigate = useNavigate()
   const toast = useStore((state) => state.toast)
 
@@ -84,6 +85,8 @@ export default function App() {
         style={background?.style ?? 'grid'}
         intensity={background?.intensity ?? 1}
         speed={background?.speed ?? 1}
+        fps={motion?.fps ?? 0}
+        quality={motion?.quality ?? 'auto'}
       />
       <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />

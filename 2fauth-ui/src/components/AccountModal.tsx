@@ -22,6 +22,7 @@ const emptyForm = {
   period: 30,
   counter: 0,
   group_id: '',
+  icon: '',
 }
 
 type Form = typeof emptyForm
@@ -57,6 +58,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
       period: account.period ?? 30,
       counter: Number(account.counter ?? 0),
       group_id: account.group_id ? String(account.group_id) : '',
+      icon: account.icon ?? '',
     })
     void loadExtras(account)
     // list responses hide the secret, so fetch the full record before editing
@@ -151,7 +153,24 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
     setBusy(true)
     try {
       const response = await api.uploadIcon(file)
-      toast('success', t('Icon {name} uploaded', { name: response.icon }))
+      update('icon', response.icon)
+    } catch (caught) {
+      setError((caught as ApiError).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function fetchOfficialIcon() {
+    if (!form.service.trim()) {
+      setError(t('Enter the service name first'))
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const response = await api.fetchIcon(form.service.trim())
+      update('icon', response.icon)
     } catch (caught) {
       setError((caught as ApiError).message)
     } finally {
@@ -176,6 +195,8 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
     if (form.otp_type === 'hotp') payload.counter = Number(form.counter)
     else payload.period = Number(form.period)
     if (form.group_id !== '') payload.group_id = Number(form.group_id)
+    // Sent only when it changed: an empty value means the icon was removed on purpose.
+    if (form.icon !== (account?.icon ?? '')) payload.icon = form.icon
 
     try {
       if (account) await api.updateAccount(account.id, payload)
@@ -394,6 +415,17 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
             </div>
 
             <div className="flex wrap">
+              <div className="card-avatar icon-preview" style={{ width: 46, height: 46 }}>
+                {form.icon ? <img src={api.iconUrl(form.icon)} alt="" /> : <Icon name="qr" size={18} />}
+              </div>
+              <button type="button" className="btn small ghost" onClick={() => void fetchOfficialIcon()} disabled={busy}>
+                <Icon name="download" size={14} /> {t('Fetch official icon')}
+              </button>
+              {form.icon && (
+                <button type="button" className="btn small ghost" onClick={() => update('icon', '')}>
+                  <Icon name="close" size={14} /> {t('Remove icon')}
+                </button>
+              )}
               <label className="btn small ghost" style={{ cursor: 'pointer' }}>
                 <Icon name="upload" size={14} /> {t('Upload icon')}
                 <input

@@ -245,6 +245,45 @@ func (s *Store) UpdateAccount(a *Account) error {
 	return err
 }
 
+// MissingIcon names an account waiting for an icon.
+type MissingIcon struct {
+	ID      int64
+	UserID  int64
+	Service string
+}
+
+// AccountsMissingIcon lists the accounts that have a service name but no icon, except
+// those whose owner removed the icon on purpose.
+func (s *Store) AccountsMissingIcon() ([]MissingIcon, error) {
+	rows, err := s.DB.Query(`SELECT id, user_id, service FROM twofaccounts
+		WHERE (icon IS NULL OR icon = '') AND icon_opt_out = ? AND service IS NOT NULL AND service <> '' AND user_id IS NOT NULL`, false)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MissingIcon
+	for rows.Next() {
+		var m MissingIcon
+		if err := rows.Scan(&m.ID, &m.UserID, &m.Service); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// SetMissingIcon gives an account an icon, unless it got one in the meantime.
+func (s *Store) SetMissingIcon(id int64, icon string) error {
+	_, err := s.DB.Exec(`UPDATE twofaccounts SET icon = ? WHERE id = ? AND (icon IS NULL OR icon = '')`, icon, id)
+	return err
+}
+
+// SetIconOptOut records whether the owner removed the icon on purpose.
+func (s *Store) SetIconOptOut(id int64, optOut bool) error {
+	_, err := s.DB.Exec(`UPDATE twofaccounts SET icon_opt_out = ? WHERE id = ?`, optOut, id)
+	return err
+}
+
 // AdvanceCounter moves an HOTP counter forward only when it still holds the value
 // the code was computed from, so two concurrent requests never share a code.
 func (s *Store) AdvanceCounter(id, from, to int64) (bool, error) {

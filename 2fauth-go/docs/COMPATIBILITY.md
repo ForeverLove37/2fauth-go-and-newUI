@@ -132,6 +132,18 @@ returned by any endpoint.
 | `GET /storage/icons/{file}` | ✅ | served with a long cache header |
 | `GET /api/v1/features`, `/features/{feature}` | ✅ | `enabled`/`disabled` per setting |
 
+## SSH keys (additions, outside the PHP contract)
+
+The command line service is described in [SSH.md](SSH.md). Its keys are managed with:
+
+| Route | Status | Notes |
+| --- | --- | --- |
+| `GET /api/v1/ssh-keys` | ➕ | `{"enabled", "port", "host_fingerprint", "keys": [...]}`; refused for API tokens |
+| `POST /api/v1/ssh-keys` | ➕ | `name`, `public_key`, `all_accounts` or `account_ids` / `group_ids` (comma separated), `password`; refused for API tokens |
+| `PUT /api/v1/ssh-keys/{key}` | ➕ | same without `public_key`; refused for API tokens |
+| `DELETE /api/v1/ssh-keys/{key}` | ➕ | no password: taking access away is always possible |
+| `POST /api/v1/twofaccounts/icons/fill` | ➕ | looks for the missing icons now, including services not found earlier; answers `{"pending"}` |
+
 ## Icon providers (additions, outside the PHP contract)
 
 `POST /api/v1/icons/default` no longer hard-codes a single icon set: it walks an
@@ -142,8 +154,8 @@ transport error, a non-200 status, an empty body or a body that is neither an SV
 nor a PNG/JPEG/WebP/GIF image. Each attempt is limited to 6 s, the whole chain to
 15 s, and a partially downloaded file is never written.
 
-`iconProviders` (comma separated ids, default `selfhst,dashboard,walkx,simpleicons,lobehub,iconify`)
-and `iconProviderMaxTries` (1-6, default `3`, only the first N *enabled*
+`iconProviders` (comma separated ids, default `selfhst,dashboard,simpleicons,walkx,lobehub,iconify`)
+and `iconProviderMaxTries` (1-6, default `6`, only the first N *enabled*
 providers are attempted) are ordinary settings, seeded by `ICON_PROVIDERS` /
 `ICON_PROVIDER_MAX_TRIES`; a value stored through the API or the settings
 endpoints wins over the environment. The chain is also readable/writable through
@@ -151,7 +163,7 @@ the dedicated endpoints:
 
 | Route | Status | Notes |
 | --- | --- | --- |
-| `GET /api/v1/icons/providers` | ➕ | authenticated: `{"providers": [{id,label,source,template,enabled,order,status}], "max_tries": 3, "all": [{id,label,source,template}]}`. `status` is `available` (enabled and within `max_tries`), `skipped` (enabled but beyond `max_tries`) or `disabled`; `order` is the 1-based position in the configured chain (0 when disabled), the array is returned enabled-first in chain order. No network call is made. |
+| `GET /api/v1/icons/providers` | ➕ | authenticated: `{"providers": [{id,label,source,template,enabled,order,status}], "max_tries": 6, "all": [{id,label,source,template}]}`. `status` is `available` (enabled and within `max_tries`), `skipped` (enabled but beyond `max_tries`) or `disabled`; `order` is the 1-based position in the configured chain (0 when disabled), the array is returned enabled-first in chain order. No network call is made. |
 | `PUT /api/v1/icons/providers` | ➕ | admin: body `{"providers": ["selfhst","iconify"], "max_tries": 2}` (a comma separated string is accepted too, and `max_tries` is optional — omitting it keeps the current value); ids are validated against the known set, length 1-6, `max_tries` 1-6, otherwise `422 {"message","errors"}`. Answers the same payload as `GET`. |
 
 The providers, in their default order:
@@ -162,14 +174,16 @@ The providers, in their default order:
 | `dashboard` | Homarr dashboard-icons | `https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{slug}.svg` |
 | `walkx` | walkxcode legacy | `https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/svg/{slug}.svg` |
 | `simpleicons` | Simple Icons | `https://cdn.simpleicons.org/{slug}` (alphanumerics only) |
-| `lobehub` | LobeHub icons | `https://cdn.jsdelivr.net/gh/lobehub/lobe-icons/packages/static-png/{slug}.png` (`-color` retry) |
-| `iconify` | Iconify search | `https://api.iconify.design/search?query={service}&limit=1` → `https://api.iconify.design/{prefix}/{name}.svg` |
+| `lobehub` | LobeHub icons | `https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg/icons/{slug}-color.svg`, then without `-color` |
+| `iconify` | Iconify search | `https://api.iconify.design/search?query={service}&limit=64` → `https://api.iconify.design/{prefix}/{name}.svg`, only for an icon named exactly after the service |
 
 `{slug}` is the lower-cased service name with spaces/underscores turned into
 dashes and everything outside `[a-z0-9.-]` removed (`Grafana Cloud` →
 `grafana-cloud`, `Proxmox VE` → `proxmox-ve`); names that yield no slug, or that
 carry markup characters, answer the usual “not found”. `dashboard` additionally
-retries the original casing variant.
+retries the original casing variant. Before the name itself, a table of common names is
+tried (`AWS`, `支付宝`, `腾讯云`), then a domain is reduced to its name (`github.com`), and
+well known brands fall back on their logo (`Google Workspace` → `google`).
 
 ## Administration
 

@@ -1,13 +1,74 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-/** Re-renders the caller every `ms` milliseconds with the current time. */
-export function useTick(ms = 250): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), ms)
-    return () => window.clearInterval(id)
-  }, [ms])
-  return now
+const secondListeners = new Set<() => void>()
+let secondTimer = 0
+let currentSecond = Math.floor(Date.now() / 1000)
+
+function scheduleSecond() {
+  secondTimer = window.setTimeout(() => {
+    currentSecond = Math.floor(Date.now() / 1000)
+    secondListeners.forEach((listener) => listener())
+    if (secondListeners.size > 0) scheduleSecond()
+    else secondTimer = 0
+  }, 1000 - (Date.now() % 1000) + 4)
+}
+
+function subscribeSecond(listener: () => void) {
+  secondListeners.add(listener)
+  if (!secondTimer) {
+    currentSecond = Math.floor(Date.now() / 1000)
+    scheduleSecond()
+  }
+  return () => {
+    secondListeners.delete(listener)
+  }
+}
+
+/**
+ * The current time, updated once on each second boundary. One timer serves every
+ * caller, so a hundred countdowns tick together and cost one wake-up.
+ */
+export function useSecond(): number {
+  return useSyncExternalStore(subscribeSecond, () => currentSecond) * 1000
+}
+
+/** How long a code stays visible once revealed. */
+export const REVEAL_MS = 5000
+
+/**
+ * Shows a code when the mouse moves onto it and hides it again after a fixed time,
+ * even if the mouse stays there: moving away and back shows it again. Only a real
+ * movement counts, so a 3D card passing under a resting cursor reveals nothing.
+ */
+export function useTimedReveal(ms = REVEAL_MS) {
+  const [revealed, setRevealed] = useState(false)
+  const timer = useRef(0)
+  const armed = useRef(true)
+
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+
+  const reveal = () => {
+    setRevealed(true)
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => setRevealed(false), ms)
+  }
+
+  const handlers = {
+    onPointerMove(event: React.PointerEvent) {
+      if (!armed.current || event.pointerType !== 'mouse' || event.buttons !== 0) return
+      if (event.movementX === 0 && event.movementY === 0) return
+      armed.current = false
+      reveal()
+    },
+    onPointerLeave() {
+      armed.current = true
+    },
+    onFocus(event: React.FocusEvent) {
+      if (event.target.matches(':focus-visible')) reveal()
+    },
+  }
+
+  return { revealed, reveal, handlers }
 }
 
 /** Runs `callback` on an interval, pausing while the tab is hidden. */

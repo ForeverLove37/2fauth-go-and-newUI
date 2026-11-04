@@ -107,6 +107,7 @@ export function themeToVars(theme: ThemeConfig): Record<string, string> {
 export function applyTheme(theme: ThemeConfig, root: HTMLElement = document.documentElement) {
   root.dataset.theme = theme.base
   root.dataset.motion = theme.motion.enabled ? 'on' : 'off'
+  root.dataset.glass = theme.motion.glass ? 'on' : 'off'
   root.dataset.bg = theme.background?.style ?? 'grid'
   for (const [name, value] of Object.entries(themeToVars(theme))) {
     root.style.setProperty(name, value)
