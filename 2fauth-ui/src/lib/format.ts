@@ -27,6 +27,12 @@ export function currentCode(account: Account, now: number): string {
   return otp.password
 }
 
+/** True when the click that just ended on this element was really the end of selecting text in it. */
+export function isSelecting(element: Element): boolean {
+  const selection = window.getSelection()
+  return Boolean(selection && !selection.isCollapsed && selection.containsNode(element, true))
+}
+
 /** What stands for a hidden code. */
 export const MASK = '*'
 

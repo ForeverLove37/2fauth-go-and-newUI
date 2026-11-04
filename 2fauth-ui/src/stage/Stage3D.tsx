@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useT } from '../i18n'
-import { layoutMeta, layoutPoint, project, type StageLayout } from './layouts'
+import { layoutMeta, layoutPoint, project, spread, type StageLayout } from './layouts'
 
 interface Stage3DProps {
   layout: StageLayout
   count: number
   autoRotate?: boolean
   zoom?: number
+  /** multiplies the radius of the layouts that have one */
+  radius?: number
   className?: string
   /** frame rate cap, 0 for the refresh rate of the display */
   fps?: number
@@ -14,19 +16,27 @@ interface Stage3DProps {
   glass?: boolean
   /** the card brought to the front; all the others fade */
   focusIndex?: number | null
-  /** a click that landed on no card */
+  /** a click outside the card brought to the front */
   onBackgroundClick?: () => void
   onDragStateChange?: (dragging: boolean) => void
+  /** shown in a corner of the stage; using them does not touch the scene */
+  controls?: React.ReactNode
   items: React.ReactNode[]
 }
 
 /**
- * Card layouts are pre-rendered at these scales (LOD). The transform then only
- * scales by ~1, so the text is rasterised at its final size and stays sharp.
+ * The size a card is laid out at, compared with the size it has at scale 1. Every card
+ * keeps this one layout at any zoom, only a transform scales it, so nothing in it can
+ * change its proportions. See also --card-fs in the stylesheet.
  */
-const LOD_STEPS = [0.8, 1, 1.2, 1.4, 1.6, 2]
-/** How far past the middle of two steps a scale must go, so a card near one does not flicker. */
-const LOD_HYSTERESIS = 0.04
+const CARD_RESOLUTION = 1.5
+/** Once this long without movement the browser draws the cards again at their exact size. */
+const REST_MS = 160
+/** The on-screen scale of a card at the middle of the scene, as far as the wheel can take it. */
+const MIN_ZOOM = 0.12
+const MAX_ZOOM = 3
+/** What one notch of a wheel (100 pixels) changes the zoom by, as an exponent. */
+const WHEEL_SPEED = 0.0009
 
 /** Opacity of a card at the back and of the cards around a focused one. */
 const FAR_OPACITY = 0.14
@@ -37,6 +47,8 @@ const FOCUS_SCALE = 2
 
 const BASE_FOCAL = 1150
 const NEAR_FOCAL_RATIO = 4
+/** A press that moved further than this is not a click. */
+const DRAG_SLOP = 6
 
 interface DragState {
   active: boolean
@@ -58,24 +70,28 @@ export default function Stage3D({
   count,
   autoRotate = false,
   zoom = 1,
+  radius = 1,
   className = '',
   fps = 0,
   glass = false,
   focusIndex = null,
   onBackgroundClick,
   onDragStateChange,
+  controls,
   items: cards,
 }: Stage3DProps) {
   const t = useT()
   const viewport = useRef<HTMLDivElement>(null)
   const items = useRef<(HTMLDivElement | null)[]>([])
-  const lods = useRef<number[]>([])
   const tiers = useRef<string[]>([])
   const focusAmount = useRef<number[]>([])
   const written = useRef<{ transform: string; z: number }[]>([])
   const drag = useRef<DragState>({ active: false, moved: 0, lastX: 0, lastY: 0, vx: 0, vy: 0 })
   const hovered = useRef(false)
   const focus = useRef<number | null>(focusIndex)
+  const press = useRef({ x: 0, y: 0, inFocus: false })
+  const collapsedAt = useRef(0)
+  const shownLayout = useRef<StageLayout | null>(null)
   const state = useRef({
     rx: 0,
     ry: 0,
@@ -85,6 +101,8 @@ export default function Stage3D({
     tZoom: 1,
     fit: 1,
     userZoom: 1,
+    radius,
+    tRadius: radius,
     spinning: autoRotate,
     spinSpeed: 0.18,
     dim: 0,
@@ -95,17 +113,33 @@ export default function Stage3D({
     () => Array.from({ length: count }, (_, index) => layoutPoint(layout, index, count)),
     [layout, count],
   )
-  const focal = useMemo(() => {
-    let radius = 0
-    for (const point of points) radius = Math.max(radius, Math.hypot(point.x, point.z))
-    // limits how much bigger the nearest card gets than the farthest
-    return Math.max(BASE_FOCAL, radius * NEAR_FOCAL_RATIO)
+  const reach = useMemo(() => {
+    let farthest = 0
+    for (const point of points) farthest = Math.max(farthest, Math.hypot(point.x, point.z))
+    return farthest
   }, [points])
 
+  // While a card is enlarged the scene behind it holds still, whatever was moving it.
   useEffect(() => {
     focus.current = focusIndex
-    state.current.dirty = true
+    const current = state.current
+    current.dirty = true
+    if (focusIndex === null) {
+      const selection = window.getSelection()
+      if (selection?.anchorNode && viewport.current?.contains(selection.anchorNode)) selection.removeAllRanges()
+      return
+    }
+    drag.current.vx = 0
+    drag.current.vy = 0
+    current.tRx = current.rx
+    current.tRy = current.ry
+    current.tZoom = current.zoom
   }, [focusIndex])
+
+  useEffect(() => {
+    state.current.tRadius = radius
+    state.current.dirty = true
+  }, [radius])
 
   // Rests the layout on the available space, whatever the number of cards.
   useEffect(() => {
@@ -114,41 +148,70 @@ export default function Stage3D({
     const current = state.current
     const meta = layoutMeta(layout)
 
+    // Measured on the layout as it comes: a larger radius really makes the scene larger.
     const fit = () => {
-      let width = 0
       let height = 0
-      for (const point of points) {
-        width = Math.max(width, Math.hypot(point.x, point.z))
-        height = Math.max(height, Math.abs(point.y))
-      }
+      for (const point of points) height = Math.max(height, Math.abs(point.y))
+      const focal = Math.max(BASE_FOCAL, reach * NEAR_FOCAL_RATIO)
       // The nearest cards are the largest and the camera looks slightly from above,
       // which is what decides whether the scene fits.
-      const near = focal / Math.max(focal - width, 1)
-      const tilt = Math.abs(Math.sin(meta.rx)) * width
+      const near = focal / Math.max(focal - reach, 1)
+      const tilt = Math.abs(Math.sin(meta.rx)) * reach
       const halfW = element.clientWidth / 2
       const halfH = element.clientHeight / 2
-      current.fit = clamp(Math.min(halfW / (width + 170), halfH / ((height + tilt + 110) * near)), 0.3, 1)
-      current.tZoom = meta.zoom * zoom * current.fit * current.userZoom
+      current.fit = clamp(Math.min(halfW / (reach + 170), halfH / ((height + tilt + 110) * near)), 0.3, 1)
+      current.tZoom = baseZoom() * current.userZoom
       current.dirty = true
     }
 
-    current.rx = meta.rx
-    current.ry = meta.ry
-    current.tRx = meta.rx
-    current.tRy = meta.ry
-    current.userZoom = 1
-    fit()
-    current.zoom = current.tZoom
+    // A filter or a new account changes the fit, not the point of view.
+    if (shownLayout.current !== layout) {
+      shownLayout.current = layout
+      current.rx = meta.rx
+      current.ry = meta.ry
+      current.tRx = meta.rx
+      current.tRy = meta.ry
+      current.userZoom = 1
+      current.radius = current.tRadius
+      fit()
+      current.zoom = current.tZoom
+    } else {
+      fit()
+    }
 
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(fit)
     observer.observe(element)
     return () => observer.disconnect()
-  }, [layout, zoom, points, focal])
+  }, [layout, zoom, points, reach])
 
   useEffect(() => {
     state.current.spinning = autoRotate
   }, [autoRotate])
+
+  // Not through React: its wheel listener is passive, and a pinch must not zoom the page.
+  useEffect(() => {
+    const element = viewport.current
+    if (!element) return
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault()
+      if (focus.current !== null) return
+      const current = state.current
+      const pixels = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1)
+      const base = baseZoom()
+      current.userZoom = clamp(
+        current.userZoom * Math.exp(-clamp(pixels, -300, 300) * WHEEL_SPEED),
+        Math.min(1, MIN_ZOOM / base),
+        Math.max(1, MAX_ZOOM / base),
+      )
+      current.tZoom = base * current.userZoom
+      current.dirty = true
+    }
+    element.addEventListener('wheel', onWheel, { passive: false })
+    return () => element.removeEventListener('wheel', onWheel)
+    // baseZoom only reads the layout and the zoom
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, zoom])
 
   // Pointer handling lives on the window and never captures the pointer, so the
   // card buttons (copy / edit / pin) receive ordinary clicks.
@@ -175,6 +238,7 @@ export default function Stage3D({
     function onUp() {
       if (!drag.current.active) return
       drag.current.active = false
+      document.body.classList.remove('stage-rotating')
       onDragStateChange?.(false)
       current.dirty = true
       window.setTimeout(() => {
@@ -189,6 +253,7 @@ export default function Stage3D({
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
+      document.body.classList.remove('stage-rotating')
     }
   }, [onDragStateChange])
 
@@ -202,6 +267,16 @@ export default function Stage3D({
     let frame = 0
     let last = performance.now()
     let lastDrawn = 0
+    let restAt = 0
+    let inMotion = false
+
+    // While things move the cards are moved as finished pictures, which costs nothing;
+    // at rest the browser draws them once at their exact size, like a vector drawing.
+    const setInMotion = (value: boolean) => {
+      if (inMotion === value || !viewport.current) return
+      inMotion = value
+      viewport.current.dataset.moving = value ? '1' : '0'
+    }
 
     const render = (now: number) => {
       frame = requestAnimationFrame(render)
@@ -238,8 +313,19 @@ export default function Stage3D({
         current.rx += (current.tRx - current.rx) * ease
         moving = true
       }
-      if (Math.abs(current.tZoom - current.zoom) > 0.0005) {
-        current.zoom += (current.tZoom - current.zoom) * (1 - Math.exp(-dt * 10))
+      // In equal ratios, not in equal steps: zooming keeps the same pace at any size.
+      if (Math.abs(current.tZoom / current.zoom - 1) > 0.0005) {
+        current.zoom *= Math.pow(current.tZoom / current.zoom, 1 - Math.exp(-dt * 10))
+        moving = true
+      } else if (current.zoom !== current.tZoom) {
+        current.zoom = current.tZoom
+        moving = true
+      }
+      if (Math.abs(current.tRadius - current.radius) > 0.0005) {
+        current.radius += (current.tRadius - current.radius) * ease
+        moving = true
+      } else if (current.radius !== current.tRadius) {
+        current.radius = current.tRadius
         moving = true
       }
 
@@ -265,13 +351,18 @@ export default function Stage3D({
         }
       }
 
-      if (moving || current.dirty) {
+      if (!moving && !current.dirty) {
+        if (now >= restAt) setInMotion(false)
+      } else {
+        restAt = now + REST_MS
+        setInMotion(true)
+        const focal = Math.max(BASE_FOCAL, reach * current.radius * NEAR_FOCAL_RATIO)
         let nearest = Infinity
         let farthest = -Infinity
         for (let index = 0; index < count; index += 1) {
           const point = points[index]
           if (!point) continue
-          const projected = project(point, current.rx, current.ry, current.zoom, focal)
+          const projected = project(spread(layout, point, current.radius), current.rx, current.ry, current.zoom, focal)
           depths[index] = projected.depth
           screenX[index] = projected.x
           screenY[index] = projected.y
@@ -293,27 +384,9 @@ export default function Stage3D({
           const dimmed = depthOpacity + (Math.min(depthOpacity, UNFOCUSED_OPACITY) - depthOpacity) * current.dim
           const opacity = dimmed + (1 - dimmed) * amount
 
-          const baseScale = clamp(scales[index], 0.2, 2.6)
-          const scale = baseScale + (focusScale - baseScale) * amount
+          const scale = scales[index] + (focusScale - scales[index]) * amount
           const x = screenX[index] * (1 - amount)
           const y = screenY[index] * (1 - amount)
-
-          const previous = lods.current[index] ?? 1
-          let bucket = previous
-          if (Math.abs(LOD_STEPS[previous] - scale) > (LOD_STEPS[1] - LOD_STEPS[0]) / 2 + LOD_HYSTERESIS) {
-            let best = Infinity
-            for (let candidate = 0; candidate < LOD_STEPS.length; candidate += 1) {
-              const delta = Math.abs(LOD_STEPS[candidate] - scale)
-              if (delta < best) {
-                best = delta
-                bucket = candidate
-              }
-            }
-          }
-          if (lods.current[index] !== bucket) {
-            lods.current[index] = bucket
-            element.dataset.lod = String(bucket)
-          }
 
           const tier = amount > 0.5 || front >= NEAR_TIER ? 'near' : front >= FAR_TIER ? 'mid' : 'far'
           if (tiers.current[index] !== tier) {
@@ -321,8 +394,7 @@ export default function Stage3D({
             element.dataset.tier = tier
           }
 
-          const residual = clamp(scale / LOD_STEPS[bucket], 0.25, 1.2)
-          const transform = `translate(-50%, -50%) translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) scale(${residual.toFixed(3)})`
+          const transform = `translate(-50%, -50%) translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) scale(${(scale / CARD_RESOLUTION).toFixed(4)})`
           // written the way the browser reads it back
           const opacityText = String(Number(opacity.toFixed(3)))
           const z = amount > 0.01 ? 100000 : Math.round(50000 - depths[index])
@@ -345,7 +417,7 @@ export default function Stage3D({
 
     frame = requestAnimationFrame(render)
     return () => cancelAnimationFrame(frame)
-  }, [points, focal, count, fps, glass])
+  }, [layout, points, reach, count, fps, glass])
 
   // A card replaced by another one starts without its opacity.
   useEffect(() => {
@@ -354,25 +426,27 @@ export default function Stage3D({
 
   function onPointerDown(event: React.PointerEvent) {
     if (event.pointerType === 'mouse' && event.button !== 0) return
-    drag.current = { active: true, moved: 0, lastX: event.clientX, lastY: event.clientY, vx: 0, vy: 0 }
+    press.current = { x: event.clientX, y: event.clientY, inFocus: Boolean((event.target as Element).closest('.is-focus')) }
     if (viewport.current) viewport.current.dataset.dragged = '0'
+    if (focus.current !== null) return
+    drag.current = { active: true, moved: 0, lastX: event.clientX, lastY: event.clientY, vx: 0, vy: 0 }
+    document.body.classList.add('stage-rotating')
     onDragStateChange?.(true)
   }
 
-  function onWheel(event: React.WheelEvent) {
-    const current = state.current
-    current.userZoom = clamp(current.userZoom * (event.deltaY > 0 ? 0.94 : 1.06), 0.4, 4)
-    current.tZoom = layoutMeta(layout).zoom * zoom * current.fit * current.userZoom
-    current.dirty = true
+  function baseZoom() {
+    return layoutMeta(layout).zoom * zoom * state.current.fit
   }
 
   function reset() {
+    // the second click of a double click that has just closed a card
+    if (focus.current !== null || performance.now() - collapsedAt.current < 500) return
     const meta = layoutMeta(layout)
     const current = state.current
     current.tRx = meta.rx
     current.tRy = meta.ry
     current.userZoom = 1
-    current.tZoom = meta.zoom * zoom * current.fit
+    current.tZoom = baseZoom()
     current.dirty = true
   }
 
@@ -381,9 +455,14 @@ export default function Stage3D({
     if (event.pointerType === 'mouse') hovered.current = Boolean((event.target as Element).closest('.orbit-card'))
   }
 
+  // While a card is enlarged the other ones take no clicks, so a click either stays in
+  // that card or lands here. Selecting text that ends outside the card is not a click.
   function onClick(event: React.MouseEvent) {
-    if (viewport.current?.dataset.dragged === '1') return
-    if (!(event.target as Element).closest('.orbit-card')) onBackgroundClick?.()
+    if (focus.current === null) return
+    const moved = Math.hypot(event.clientX - press.current.x, event.clientY - press.current.y)
+    if (press.current.inFocus || moved > DRAG_SLOP || (event.target as Element).closest('.is-focus')) return
+    collapsedAt.current = performance.now()
+    onBackgroundClick?.()
   }
 
   return (
@@ -396,7 +475,6 @@ export default function Stage3D({
         hovered.current = false
       }}
       onClick={onClick}
-      onWheel={onWheel}
       onDoubleClick={reset}
     >
       <div className="stage3d-world">
@@ -404,7 +482,6 @@ export default function Stage3D({
           <div
             key={index}
             className={`stage3d-item${index === focusIndex ? ' is-focus' : ''}`}
-            data-lod="1"
             data-tier="near"
             ref={(element) => {
               items.current[index] = element
@@ -414,8 +491,20 @@ export default function Stage3D({
           </div>
         ))}
       </div>
+      {controls && (
+        <div
+          className="stage3d-controls"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          {controls}
+        </div>
+      )}
       <div className="stage3d-hint" aria-hidden>
-        {t('Drag to rotate · scroll to zoom · click a card to enlarge it · double-click to reset')}
+        {focusIndex !== null
+          ? t('Click outside the card to shrink it')
+          : t('Drag to rotate · scroll to zoom · click a card to enlarge it · double-click to reset')}
       </div>
     </div>
   )

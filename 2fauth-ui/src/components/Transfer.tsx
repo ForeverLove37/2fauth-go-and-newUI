@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api, type ImportResult } from '../api/client'
 import type { Account, ApiError, Group } from '../api/types'
 import { useT } from '../i18n'
-import { download, stamp } from '../lib/format'
+import { accountLabel, accountSubLabel, download, stamp } from '../lib/format'
 import { useStore } from '../store/useStore'
 import Icon from './Icon'
 
@@ -261,16 +261,125 @@ export function ImportExportModal({ accounts, onClose, onImported }: TransferPro
 
 interface GroupsProps {
   groups: Group[]
+  accounts: Account[]
   onClose: () => void
   onChanged: () => Promise<void> | void
+  /** accounts have moved between groups */
+  onAssigned: () => Promise<void> | void
+}
+
+/** Picks the accounts to add to a group, all at once. */
+function AddToGroup({
+  group,
+  groups,
+  accounts,
+  onBack,
+  onAssigned,
+}: {
+  group: Group
+  groups: Group[]
+  accounts: Account[]
+  onBack: () => void
+  onAssigned: GroupsProps['onAssigned']
+}) {
+  const t = useT()
+  const toast = useStore((state) => state.toast)
+  const [query, setQuery] = useState('')
+  const [picked, setPicked] = useState<number[]>([])
+  const [busy, setBusy] = useState(false)
+
+  const names = useMemo(() => new Map(groups.map((item) => [item.id, item.name])), [groups])
+  // Accounts shared with this user belong to someone else's groups.
+  const candidates = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    return accounts.filter(
+      (account) =>
+        !account.is_borrowed &&
+        account.group_id !== group.id &&
+        `${account.service ?? ''} ${account.account ?? ''}`.toLowerCase().includes(needle),
+    )
+  }, [accounts, group.id, query])
+  const allPicked = candidates.length > 0 && candidates.every((account) => picked.includes(account.id))
+
+  function toggle(id: number) {
+    setPicked((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]))
+  }
+
+  function toggleAll() {
+    const shown = candidates.map((account) => account.id)
+    setPicked((current) => (allPicked ? current.filter((id) => !shown.includes(id)) : [...new Set([...current, ...shown])]))
+  }
+
+  async function add() {
+    setBusy(true)
+    try {
+      await api.assignGroup(group.id, picked)
+      await onAssigned()
+      toast('success', t('{count} accounts added to {name}', { count: picked.length, name: group.name }))
+      onBack()
+    } catch (caught) {
+      toast('error', (caught as ApiError).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="stack">
+      <div className="flex">
+        <input
+          className="input grow"
+          placeholder={t('Search accounts')}
+          aria-label={t('Search accounts')}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+        <button className="btn small ghost" onClick={toggleAll} disabled={candidates.length === 0}>
+          {allPicked ? t('Clear selection') : t('Select all')}
+        </button>
+      </div>
+
+      {candidates.length === 0 ? (
+        <p className="hint">{t('No accounts to add.')}</p>
+      ) : (
+        <div className="pick-list">
+          {candidates.map((account) => {
+            const now = account.group_id === null ? undefined : names.get(account.group_id)
+            return (
+              <label key={account.id} className="pick-row">
+                <input type="checkbox" checked={picked.includes(account.id)} onChange={() => toggle(account.id)} />
+                <span className="grow">
+                  <strong>{accountLabel(account)}</strong>
+                  <span className="hint">{accountSubLabel(account)}</span>
+                </span>
+                {now && <span className="hint">{t('Now in {name}', { name: now })}</span>}
+              </label>
+            )
+          })}
+        </div>
+      )}
+
+      <p className="hint">{t('An account is in one group at a time: adding it here takes it out of its current group.')}</p>
+      <div className="flex" style={{ justifyContent: 'flex-end' }}>
+        <button className="btn small ghost" onClick={onBack}>
+          {t('Back')}
+        </button>
+        <button className="btn small primary" onClick={() => void add()} disabled={busy || picked.length === 0}>
+          <Icon name="plus" size={14} /> {t('Add {count} accounts', { count: picked.length })}
+        </button>
+      </div>
+    </div>
+  )
 }
 
 /** Manage groups and their visibility in the chip bar. */
-export function GroupsModal({ groups, onClose, onChanged }: GroupsProps) {
+export function GroupsModal({ groups, accounts, onClose, onChanged, onAssigned }: GroupsProps) {
   const t = useT()
   const toast = useStore((state) => state.toast)
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
+  const [addingTo, setAddingTo] = useState<number | null>(null)
+  const adding = groups.find((group) => group.id === addingTo)
 
   async function create() {
     if (!name.trim()) return
@@ -310,11 +419,23 @@ export function GroupsModal({ groups, onClose, onChanged }: GroupsProps) {
     <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-head">
-          <h3>{t('Groups')}</h3>
+          <h3>{adding ? t('Add accounts to {name}', { name: adding.name }) : t('Groups')}</h3>
           <button className="btn icon ghost close" onClick={onClose} aria-label={t('Close')}>
             <Icon name="close" />
           </button>
         </div>
+        {adding ? (
+          <div className="modal-body">
+            <AddToGroup
+              key={adding.id}
+              group={adding}
+              groups={groups}
+              accounts={accounts}
+              onBack={() => setAddingTo(null)}
+              onAssigned={onAssigned}
+            />
+          </div>
+        ) : (
         <div className="modal-body stack">
           <div className="flex">
             <input
@@ -351,6 +472,9 @@ export function GroupsModal({ groups, onClose, onChanged }: GroupsProps) {
                     </td>
                     <td>
                       <div className="flex" style={{ justifyContent: 'flex-end' }}>
+                        <button className="btn small" onClick={() => setAddingTo(group.id)}>
+                          <Icon name="plus" size={13} /> {t('Add accounts')}
+                        </button>
                         <button className="btn small ghost" onClick={() => void rename(group)}>
                           {t('Rename')}
                         </button>
@@ -365,6 +489,7 @@ export function GroupsModal({ groups, onClose, onChanged }: GroupsProps) {
             </table>
           )}
         </div>
+        )}
       </div>
     </div>
   )

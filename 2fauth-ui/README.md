@@ -14,8 +14,10 @@ app stays reachable at `/legacy`.
   | 环绕 / 螺旋 / 卡墙 / 球面 | 纯 3D 舞台，卡片在空间中投影，**每张卡片都实时显示自己的验证码** |
   | 网格 / 列表 | 纯 2D |
 * **3D 自由度**: drag to rotate on **both axes** (X and Y), inertia, wheel zoom, double-click reset, auto-rotate toggle (`R`). Resting on a card stops the rotation. Cards are billboarded — they stay readable while the scene spins.
-* **动态分辨率 (LOD)**: every card is laid out at the size it will occupy on screen (0.8× / 1× / 1.2× / 1.4× / 1.6× / 2×) and the transform only scales the remainder, so cards closest to the camera stay sharp instead of being stretched. Cards render their code and buttons natively, so copying and editing work in 3D as well.
-* **网格拖拽排序**: in grid mode, press and drag a card to reorder the panel: the card follows the pointer, the others slide out of its way, and `Esc` cancels. The new order is persisted with `POST /api/v1/twofaccounts/reorder`.
+* **矢量式缩放**: every card keeps one layout at any zoom and only a transform scales it, so its proportions cannot change. While moving, a card is moved as a finished picture; at rest the browser draws it again at its exact size. Cards render their code and buttons natively, so copying and editing work in 3D as well.
+* **自由网格**: in grid mode a card stays wherever it is dropped, like the icon view of a folder; `Esc` cancels a drag. Dragging its text selects the text instead. `Arrange` tidies the cards by group, by service name, or to the nearest free position, and saves the resulting order with `POST /api/v1/twofaccounts/reorder`. Positions are kept per browser and per user.
+* **放大卡片**: while a card is enlarged the scene behind it takes no input: dragging in the card selects text, and a click outside only shrinks it.
+* **半径**: Orbit and Sphere have a radius slider, remembered per browser.
 * **背景场景**: 7 scenery styles — `grid` 网格线 / `stars` 星空 / `nebula` 星云 / `waves` 波纹 / `aurora` 极光 (pure CSS) / `bokeh` 光斑 / `minimal` 极简 — each theme preset ships its own, and brightness + speed are adjustable.
 * **多语言**: English source ids with a 简体中文 catalogue (`src/i18n/`), 繁體中文 falls back to it; the language can be picked on the sign-in screen or in `Settings → 选项` and is stored as the server-side `lang` preference.
 
@@ -36,7 +38,7 @@ npm install
 npm run dev        # Vite dev server on :5173, proxy-free: it talks to /api/v1 on the same origin
 npm run typecheck  # tsc --noEmit
 npm run build      # tsc -b && vite build → dist/
-npm run smoke      # jsdom smoke test: display modes, LOD, reorder grid, scenery, i18n, SSO, login
+npm run smoke      # jsdom smoke test: display modes, free grid and arranging, scenery, i18n, SSO, login
 ```
 
 Deploy by copying `dist/` where the Go binary expects it:
@@ -55,12 +57,12 @@ src/store/useStore.ts   zustand store: boot, login/register/logout, accounts, gr
 src/three/Backdrop.tsx  R3F canvas: per-style scenery (grid, starfield, nebula, waves, bokeh) + CSS aurora/minimal
 src/i18n/               message catalogs: English ids, zh-CN dictionary, locale store, useT() hook
 src/stage/layouts.ts    orbit / helix / wall / sphere placement + projection
-src/stage/Stage3D.tsx   LOD-based resolution, free X/Y rotation, inertia, wheel zoom, auto-rotate, double-click reset
+src/stage/Stage3D.tsx   one card layout at any zoom, free X/Y rotation, inertia, wheel zoom, radius, auto-rotate, double-click reset
 src/theme/              15 presets, token→CSS-variable compiler, zustand theme store with profiles
 src/api/sso.ts          OIDC config / start / admin settings / Keycloak export client
 src/components/
   AccountCard.tsx       glass card: icon, labels, flags, hidden OTP shown on hover, countdown ring, next code, actions
-  SortableGrid.tsx      2D grid: the dragged card follows the pointer, the others slide out of its way
+  FreeGrid.tsx          2D grid: cards stay where they are dropped, arranging by group, name or nearest position
   SshKeysPanel.tsx      public keys allowed to read codes from the command line, and their scope
   SsoSettingsPanel.tsx  issuer/client/secret/scopes, connection test, Keycloak JSON export
   IconProvidersPanel.tsx admin: icon library order, enable/disable, how many libraries to try

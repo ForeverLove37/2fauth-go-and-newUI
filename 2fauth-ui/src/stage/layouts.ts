@@ -78,6 +78,18 @@ export function layoutPoint(layout: StageLayout, index: number, count: number): 
   }
 }
 
+/** The layouts built around a radius the user can change. */
+export function hasRadius(layout: string): layout is 'orbit' | 'sphere' {
+  return layout === 'orbit' || layout === 'sphere'
+}
+
+/** A point of the layout with its radius multiplied. The rings of an orbit keep their height. */
+export function spread(layout: StageLayout, point: Vec3, factor: number): Vec3 {
+  if (layout === 'orbit') return { x: point.x * factor, y: point.y, z: point.z * factor }
+  if (layout === 'sphere') return { x: point.x * factor, y: point.y * factor, z: point.z * factor }
+  return point
+}
+
 function clampRadius(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, 120 + n * 34))
 }

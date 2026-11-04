@@ -6,6 +6,7 @@ import { errors, dom } from './dom-setup'
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
+import { gridMetrics, packInRows, packNearest, placeMissing } from '../src/lib/arrange'
 
 const { window } = dom
 const globals = globalThis as unknown as Record<string, unknown>
@@ -272,7 +273,7 @@ async function main() {
   await tick(120)
   assert('choosing a scenery updates <html data-bg>', window.document.documentElement.dataset.bg === 'nebula')
 
-  // grid: cards expose a reorder handle and drag order draft
+  // grid: cards lie on a canvas and can be tidied
   container.querySelector('[role="tab"][aria-selected="false"]')
   const gridButton = [...container.querySelectorAll('.segmented button')].find((element) =>
     element.textContent?.includes('网格'),
@@ -280,17 +281,31 @@ async function main() {
   gridButton?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
   await tick(160)
   const cells = [...container.querySelectorAll('.grid2d-cell')]
-  assert('grid mode renders reorderable cells', cells.length === 3 && container.querySelector('.grid2d.reorderable') !== null)
+  assert('grid mode renders movable cells', cells.length === 3 && container.querySelector('.grid2d.movable') !== null)
   assert('grid cells carry account ids', cells.every((cell) => (cell as HTMLElement).dataset.accountId !== undefined))
 
-  // horizontal resolution: 3D cards get an LOD bucket instead of being stretched
+  // the 3D cards have one layout at any zoom
   const orbitButton = [...container.querySelectorAll('.segmented button')].find((element) =>
     element.textContent?.includes('环绕'),
   ) as HTMLButtonElement | undefined
   orbitButton?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
   await tick(200)
-  const lodItems = [...container.querySelectorAll('.stage3d-item')]
-  assert('3D cards declare a LOD bucket', lodItems.length === 3 && lodItems.every((item) => (item as HTMLElement).dataset.lod !== undefined))
+  assert('the orbit offers a radius', container.querySelector('.stage-radius input') !== null)
+
+  const metrics = gridMetrics(1000)
+  assert('three cards fit on a row of 1000 pixels', metrics.columns === 3)
+  const first = { x: metrics.padX, y: metrics.padY }
+  const second = { x: metrics.padX + metrics.cellW + metrics.gapX, y: metrics.padY }
+  const third = { x: metrics.padX + (metrics.cellW + metrics.gapX) * 2, y: metrics.padY }
+  const tidied = packNearest([1, 2, 3], { 1: { x: second.x + 20, y: 30 }, 2: { x: second.x - 100, y: 10 }, 3: { x: 2000, y: 5 } }, metrics)
+  assert('tidying: the closest card keeps a position', tidied[1].x === second.x && tidied[1].y === second.y)
+  assert('tidying: the next one takes the nearest free one', tidied[2].x === first.x && tidied[2].y === first.y)
+  assert('tidying: a card outside the rows comes back', tidied[3].x === third.x && tidied[3].y === third.y)
+  assert('tidying: no two cards share a position', new Set(Object.values(tidied).map((spot) => `${spot.x},${spot.y}`)).size === 3)
+  const rows = packInRows([[1, 2], [3]], metrics)
+  assert('by group: each group starts a row', rows[3].x === first.x && rows[3].y > rows[1].y)
+  const filled = placeMissing([1, 2], { 1: { x: first.x, y: first.y } }, metrics)
+  assert('a new card takes a free position', filled[2].x === second.x && filled[1].x === first.x)
 
   // i18n: switching to English relabels the interface
   useI18nStore.getState().setLocale('en')

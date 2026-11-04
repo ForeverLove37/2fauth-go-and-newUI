@@ -9,6 +9,7 @@ import {
   currentCode,
   identityHue,
   initials,
+  isSelecting,
   maskedCode,
   otpProgress,
   remainingSeconds,
@@ -85,8 +86,9 @@ export const AccountCard = memo(function AccountCard({
     return list
   }, [account, isHotp, t])
 
-  async function copy(event: React.MouseEvent) {
+  async function copy(event: React.SyntheticEvent) {
     event.stopPropagation()
+    if (isSelecting(event.currentTarget)) return
     const code = currentCode(account, Date.now())
     if (!code) return
     const ok = await copyText(code)
@@ -94,7 +96,7 @@ export const AccountCard = memo(function AccountCard({
   }
 
   function select(event: React.MouseEvent) {
-    if (wasDragged(event.currentTarget)) return
+    if (wasDragged(event.currentTarget) || isSelecting(event.currentTarget)) return
     onSelect(account.id)
   }
 
@@ -105,7 +107,8 @@ export const AccountCard = memo(function AccountCard({
       onClick={select}
       onDoubleClick={(event) => {
         event.stopPropagation()
-        if (wasDragged(event.currentTarget)) return
+        // A double click on text selects a word. In the 3D stage the first click has enlarged the card.
+        if ((event.target as Element).closest('.card-text') || event.currentTarget.closest('.stage3d')) return
         onOpen(account)
       }}
       tabIndex={0}
@@ -118,15 +121,15 @@ export const AccountCard = memo(function AccountCard({
       <div className="card-top">
         <CardAvatar account={account} showIcon={showIcon} />
         <div className="card-title">
-          <strong>{accountLabel(account)}</strong>
-          <span>{accountSubLabel(account)}</span>
+          <strong className="card-text">{accountLabel(account)}</strong>
+          <span className="card-text">{accountSubLabel(account)}</span>
         </div>
       </div>
 
       {flags.length > 0 && (
         <div className="card-flags">
           {flags.map((flag) => (
-            <span key={flag.text} className={`flag${flag.tone ? ` ${flag.tone}` : ''}`}>
+            <span key={flag.text} className={`flag card-text${flag.tone ? ` ${flag.tone}` : ''}`}>
               {flag.text}
             </span>
           ))}
@@ -134,9 +137,22 @@ export const AccountCard = memo(function AccountCard({
       )}
 
       <div className="card-otp">
-        <button className={`otp-digits${hidden ? ' dots' : ''}`} onClick={copy} title={t('Copy code')} {...handlers}>
+        {/* not a <button>: browsers do not let a selection start in one */}
+        <span
+          className={`otp-digits card-text${hidden ? ' dots' : ''}`}
+          role="button"
+          tabIndex={0}
+          onClick={copy}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter') return
+            event.stopPropagation()
+            void copy(event)
+          }}
+          title={t('Copy code')}
+          {...handlers}
+        >
           {hidden ? maskedCode(account) : <LiveCode account={account} />}
-        </button>
+        </span>
         {!isHotp && (
           <div className="otp-meta">
             <CountdownRing account={account} />
@@ -145,7 +161,7 @@ export const AccountCard = memo(function AccountCard({
       </div>
 
       {showNext && !isHotp && account.otp?.next_password && !compact && (
-        <div className="card-next">
+        <div className="card-next card-text">
           {t('Next')} <span className="mono">{hidden ? maskedCode(account) : account.otp.next_password}</span>
         </div>
       )}

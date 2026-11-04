@@ -3,14 +3,15 @@ import { api } from '../api/client'
 import type { Account } from '../api/types'
 import AccountModal from '../components/AccountModal'
 import { AccountCard, CardAvatar, LiveCode } from '../components/AccountCard'
-import SortableGrid from '../components/SortableGrid'
+import FreeGrid, { type ArrangeKind, type FreeGridHandle } from '../components/FreeGrid'
+import Menu from '../components/Menu'
 import { GroupsModal, ImportExportModal } from '../components/Transfer'
 import Icon from '../components/Icon'
 import { useT } from '../i18n'
 import { accountLabel, accountSubLabel, copyText, currentCode, maskedCode, remainingSeconds } from '../lib/format'
 import { usePolling, useSecond, useTimedReveal } from '../lib/hooks'
 import Stage3D from '../stage/Stage3D'
-import type { StageLayout } from '../stage/layouts'
+import { hasRadius, type StageLayout } from '../stage/layouts'
 import { useStore } from '../store/useStore'
 import { useThemeStore } from '../theme/store'
 import type { BackgroundStyle } from '../theme/types'
@@ -19,6 +20,8 @@ type ViewMode = StageLayout | 'grid' | 'list'
 
 const MODE_KEY = '2fauth.mode.v1'
 const ROTATE_KEY = '2fauth.autorotate.v1'
+const RADIUS_KEY = '2fauth.radius.v1'
+const GRID_KEY = '2fauth.grid.v1'
 
 const modeMeta: { id: ViewMode; label: string; icon: 'orbit' | 'grid' | 'share' | 'qr' | 'sliders' | 'eye' | 'copy' }[] = [
   { id: 'orbit', label: 'Orbit', icon: 'orbit' },
@@ -100,6 +103,14 @@ function loadMode(): ViewMode {
   return 'orbit'
 }
 
+function loadRadii(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem(RADIUS_KEY) ?? '{}') as Record<string, number>
+  } catch {
+    return {}
+  }
+}
+
 /** The account panel: four 3D layouts plus 2D views sharing the same cards. */
 export default function Dashboard() {
   const t = useT()
@@ -113,6 +124,7 @@ export default function Dashboard() {
   const loadGroups = useStore((state) => state.loadGroups)
   const toggleFavorite = useStore((state) => state.toggleFavorite)
   const locked = useStore((state) => state.locked)
+  const userId = useStore((state) => state.user?.id)
   const setPreference = useStore((state) => state.setPreference)
   const themeAutoRotate = useThemeStore((state) => state.theme.motion.autoRotate)
   const motion = useThemeStore((state) => state.theme.motion)
@@ -132,7 +144,9 @@ export default function Dashboard() {
   const [groupsOpen, setGroupsOpen] = useState(false)
   // the card enlarged in the 3D modes
   const [focusedId, setFocusedId] = useState<number | null>(null)
+  const [radii, setRadii] = useState(loadRadii)
   const searchRef = useRef<HTMLInputElement>(null)
+  const gridRef = useRef<FreeGridHandle>(null)
 
   // Hidden unless the user chose otherwise, also while the preferences are loading.
   const dots = prefs.showOtpAsDot !== false
@@ -146,6 +160,10 @@ export default function Dashboard() {
   useEffect(() => {
     localStorage.setItem(ROTATE_KEY, autoRotate ? '1' : '0')
   }, [autoRotate])
+
+  useEffect(() => {
+    localStorage.setItem(RADIUS_KEY, JSON.stringify(radii))
+  }, [radii])
 
   usePolling(() => {
     void loadAccounts(true).catch(() => {
@@ -168,7 +186,9 @@ export default function Dashboard() {
   }, [accounts, groupFilter, query])
 
   const selected = visible.find((account) => account.id === selectedId) ?? visible[0] ?? null
-  const canReorder = mode === 'grid' && groupFilter === 'all' && query.trim() === '' && visible.length > 1
+  // A filtered view has gaps in it: its cards are shown one after the other instead.
+  const canArrange = mode === 'grid' && groupFilter === 'all' && query.trim() === ''
+  const radius = hasRadius(mode) ? (radii[mode] ?? 1) : 1
 
   useEffect(() => {
     if (selected && selected.id !== selectedId) select(selected.id)
@@ -229,7 +249,7 @@ export default function Dashboard() {
   const onCardSelect = useCallback(
     (id: number) => {
       select(id)
-      setFocusedId((current) => (current === id ? null : id))
+      setFocusedId((current) => current ?? id)
     },
     [select],
   )
@@ -391,6 +411,19 @@ export default function Dashboard() {
             <Icon name={dots ? 'eye' : 'eye-off'} size={13} /> {dots ? t('Show all codes') : t('Hide all codes')}
           </button>
 
+          {canArrange && (
+            <Menu
+              label={t('Arrange')}
+              items={(
+                [
+                  ['group', t('By group')],
+                  ['name', t('By service name')],
+                  ['nearest', t('To the nearest free position')],
+                ] as [ArrangeKind, string][]
+              ).map(([kind, label]) => ({ label, onClick: () => gridRef.current?.arrange(kind) }))}
+            />
+          )}
+
           {is3D && motion.showFps && <FpsMeter />}
 
           <div className="right flex">
@@ -414,21 +447,46 @@ export default function Dashboard() {
         ) : is3D ? (
           <Stage3D
             layout={mode}
+            radius={radius}
             count={visible.length}
             autoRotate={autoRotate}
             fps={motion.fps ?? 0}
             glass={motion.glass ?? false}
             focusIndex={focusIndex >= 0 ? focusIndex : null}
+            controls={
+              hasRadius(mode) && (
+                <label className="stage-radius" title={t('Double-click to restore the radius')} onDoubleClick={() => setRadii((current) => ({ ...current, [mode]: 1 }))}>
+                  <span>{t('Radius')}</span>
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={2.5}
+                    step={0.05}
+                    value={radius}
+                    aria-label={t('Radius')}
+                    onChange={(event) => {
+                      const value = Number(event.target.value)
+                      setRadii((current) => ({ ...current, [mode]: value }))
+                    }}
+                  />
+                  <span className="mono">{Math.round(radius * 100)}%</span>
+                </label>
+              )
+            }
             onBackgroundClick={() => setFocusedId(null)}
             items={visible.map((account) => cardFor(account))}
           />
         ) : mode === 'grid' ? (
-          <SortableGrid
+          <FreeGrid
+            ref={gridRef}
+            key={userId}
             accounts={visible}
-            enabled={canReorder}
+            groups={groups}
+            enabled={canArrange}
             animate={motion.enabled}
+            storageKey={`${GRID_KEY}.${userId ?? 0}`}
             renderCard={cardFor}
-            onReorder={reorder}
+            onArranged={reorder}
           />
         ) : (
           <div className="list-mode">
@@ -538,7 +596,7 @@ export default function Dashboard() {
             <span>
               <kbd>/</kbd> {t('Search')}
             </span>
-            {canReorder && <span>{t('Drag cards to reorder')}</span>}
+            {canArrange && <span>{t('Drag a card anywhere; drag its text to select it')}</span>}
           </span>
         </div>
       </div>
@@ -564,7 +622,13 @@ export default function Dashboard() {
       )}
 
       {groupsOpen && (
-        <GroupsModal groups={groups} onClose={() => setGroupsOpen(false)} onChanged={() => loadGroups()} />
+        <GroupsModal
+          groups={groups}
+          accounts={accounts}
+          onClose={() => setGroupsOpen(false)}
+          onChanged={() => loadGroups()}
+          onAssigned={() => Promise.all([loadGroups(), loadAccounts(true)]).then(() => undefined)}
+        />
       )}
     </div>
   )

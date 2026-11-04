@@ -30,6 +30,7 @@
   --shadow: 0 24px 60px rgba(3, 6, 14, 0.6);
   --font: 'Inter', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', sans-serif;
   --mono: 'JetBrains Mono', 'SFMono-Regular', ui-monospace, 'Cascadia Mono', Menlo, monospace;
+  --card-fs: 1;
   --otp-size: 27px;
   --otp-size-lg: 30px;
   --otp-glow: rgba(85, 230, 193, 0.42);
@@ -282,16 +283,28 @@ textarea { resize: vertical; min-height: 110px; font-family: var(--mono); font-s
   position: relative; flex: 1; min-height: 0;
   touch-action: none; cursor: grab; overflow: hidden;
   isolation: isolate;
+  -webkit-user-select: none; user-select: none;
 }
 .stage3d:active { cursor: grabbing; }
+/* Rotating is not selecting, wherever the pointer goes on its way. */
+body.stage-rotating, body.stage-rotating * { cursor: grabbing !important; -webkit-user-select: none !important; user-select: none !important; }
+/* A card brought to the front holds the stage: the scene behind it takes no input. */
+.stage3d.has-focus, .stage3d.has-focus:active { cursor: default; }
+.stage3d.has-focus .stage3d-item:not(.is-focus) { pointer-events: none; }
+.stage3d-item.is-focus .orbit-card { cursor: default; -webkit-user-select: text; user-select: text; }
+.stage3d-item.is-focus .card-text { cursor: text; }
+.stage3d-item.is-focus .otp-digits { cursor: pointer; }
 .stage3d-world { position: absolute; inset: 0; }
-/* Each card is a compositor layer: moving and fading it repaints nothing. */
+/* One layout at every zoom: only the transform scales a card, so its proportions cannot
+   change. While moving, each card is a finished picture and moving it repaints nothing;
+   without the hint at rest, the browser draws it again at its exact size. */
 .stage3d-item {
   position: absolute; left: 50%; top: 50%;
   transform: translate(-50%, -50%);
-  will-change: transform, opacity;
-  --card-w: 300px; --card-h: 196px; --card-fs: 1;
+  --card-fs: 1.5;
+  text-rendering: geometricPrecision;
 }
+.stage3d[data-moving='1'] .stage3d-item { will-change: transform, opacity; }
 /* The cards are opaque here by default, which keeps overlapping codes readable. */
 .stage3d .orbit-card {
   backdrop-filter: none;
@@ -305,8 +318,8 @@ textarea { resize: vertical; min-height: 110px; font-family: var(--mono); font-s
    the blur fades, otherwise a faded card shows a sharp double image of what is behind it.
    Barely visible cards skip the blur, which also keeps a pile of them from turning to fog. */
 [data-glass='on'] .stage3d-item {
-  border-radius: var(--radius);
-  backdrop-filter: blur(var(--blur)) saturate(1.5);
+  border-radius: calc(var(--radius) * var(--card-fs));
+  backdrop-filter: blur(calc(var(--blur) * var(--card-fs))) saturate(1.5);
 }
 [data-glass='on'] .stage3d-item[data-tier='far'],
 [data-glass='on'] .stage3d.has-focus .stage3d-item:not(.is-focus) { backdrop-filter: none; }
@@ -321,8 +334,7 @@ textarea { resize: vertical; min-height: 110px; font-family: var(--mono); font-s
   border-color: color-mix(in srgb, #ffffff 20%, var(--border));
   box-shadow: 0 18px 44px rgb(0 0 0 / 0.26), inset 0 1px 0 color-mix(in srgb, #ffffff 24%, transparent);
 }
-[data-glass='on'] .grid2d .orbit-card,
-[data-glass='on'] .card-floating .orbit-card { backdrop-filter: blur(var(--blur)) saturate(1.5); }
+[data-glass='on'] .grid2d .orbit-card { backdrop-filter: blur(var(--blur)) saturate(1.5); }
 /* The back of the scene shows who, not details. */
 .stage3d-item[data-tier='far'] .card-flags,
 .stage3d-item[data-tier='far'] .card-next,
@@ -334,15 +346,7 @@ textarea { resize: vertical; min-height: 110px; font-family: var(--mono); font-s
   box-shadow: 0 30px 90px rgb(0 0 0 / 0.45), 0 0 46px color-mix(in srgb, var(--identity) 45%, transparent);
 }
 .stage3d-item.is-focus .card-actions { opacity: 1; }
-/* dynamic resolution: the card is laid out at (almost) its on-screen size, so
-   the transform never has to stretch the text */
-.stage3d-item[data-lod='0'] { --card-w: 240px; --card-h: 157px; --card-fs: 0.8; }
-.stage3d-item[data-lod='1'] { --card-w: 300px; --card-h: 196px; --card-fs: 1; }
-.stage3d-item[data-lod='2'] { --card-w: 360px; --card-h: 235px; --card-fs: 1.2; }
-.stage3d-item[data-lod='3'] { --card-w: 420px; --card-h: 274px; --card-fs: 1.4; }
-.stage3d-item[data-lod='4'] { --card-w: 480px; --card-h: 314px; --card-fs: 1.6; }
-.stage3d-item[data-lod='5'] { --card-w: 600px; --card-h: 392px; --card-fs: 2; }
-.stage3d-item .orbit-card { width: var(--card-w); height: var(--card-h); }
+.stage3d-item .orbit-card { width: calc(300px * var(--card-fs)); height: calc(196px * var(--card-fs)); }
 .stage3d-hint {
   position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
   font-size: 11px; color: var(--muted); opacity: 0.6; pointer-events: none;
@@ -353,12 +357,11 @@ textarea { resize: vertical; min-height: 110px; font-family: var(--mono); font-s
 .orbit-card {
   position: relative;
   width: 300px; height: 196px;
-  --card-fs: 1;
   --identity: hsl(var(--card-hue, 200) 72% 58%);
   padding: calc(16px * var(--card-fs)) calc(18px * var(--card-fs));
-  border-radius: var(--radius);
+  border-radius: calc(var(--radius) * var(--card-fs));
   background: var(--card-grad);
-  border: 1px solid var(--border);
+  border: calc(1px * var(--card-fs)) solid var(--border);
   box-shadow: var(--shadow), inset 0 1px 0 color-mix(in srgb, #ffffff 8%, transparent);
   backdrop-filter: blur(calc(var(--blur) * 0.6));
   display: flex; flex-direction: column; gap: calc(9px * var(--card-fs));
@@ -383,7 +386,7 @@ textarea { resize: vertical; min-height: 110px; font-family: var(--mono); font-s
 .card-top { display: flex; align-items: center; gap: calc(10px * var(--card-fs)); }
 .card-avatar {
   width: calc(38px * var(--card-fs)); height: calc(38px * var(--card-fs));
-  border-radius: var(--radius-sm); flex: none; display: grid; place-items: center;
+  border-radius: calc(var(--radius-sm) * var(--card-fs)); flex: none; display: grid; place-items: center;
   font-weight: 800; font-size: calc(14px * var(--card-fs)); color: #fff;
   background: linear-gradient(140deg, var(--identity, var(--accent-2)), color-mix(in srgb, var(--identity, var(--accent-3)) 60%, #000));
   overflow: hidden;
@@ -392,13 +395,14 @@ textarea { resize: vertical; min-height: 110px; font-family: var(--mono); font-s
 .card-avatar.has-icon, .card-avatar.icon-preview { background: rgb(255 255 255 / 0.94); padding: calc(4px * var(--card-fs, 1)); }
 .card-avatar img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .card-title { min-width: 0; }
+.card-title strong, .card-title span { width: fit-content; max-width: 100%; }
 .card-title strong { display: block; font-size: calc(14px * var(--card-fs)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-title span { display: block; font-size: calc(11.5px * var(--card-fs)); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .card-flags { display: flex; gap: calc(5px * var(--card-fs)); flex-wrap: wrap; }
 .flag {
   font-size: calc(9.5px * var(--card-fs)); letter-spacing: 0.07em; text-transform: uppercase; font-weight: 700;
-  padding: 2px 6px; border-radius: 5px; border: 1px solid var(--border);
+  padding: calc(2px * var(--card-fs)) calc(6px * var(--card-fs)); border-radius: calc(5px * var(--card-fs)); border: calc(1px * var(--card-fs)) solid var(--border);
   color: var(--muted); background: color-mix(in srgb, var(--accent-2) 10%, transparent);
 }
 .flag.hot { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
@@ -407,64 +411,71 @@ textarea { resize: vertical; min-height: 110px; font-family: var(--mono); font-s
 .card-otp { margin-top: auto; display: flex; align-items: flex-end; justify-content: space-between; gap: calc(10px * var(--card-fs)); }
 .otp-digits {
   font-family: var(--mono); font-size: calc(var(--otp-size) * var(--card-fs)); font-weight: 600; letter-spacing: 0.13em;
-  color: var(--text); text-shadow: 0 0 26px var(--otp-glow-soft);
+  color: var(--text); text-shadow: 0 0 calc(26px * var(--card-fs)) var(--otp-glow-soft);
   cursor: pointer; border: 0; background: none; padding: 0; line-height: 1.05;
   transition: color var(--motion);
 }
 .otp-digits:hover { color: var(--accent); }
 .otp-digits.dots { color: var(--muted); text-shadow: none; }
-.otp-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.otp-meta { display: flex; flex-direction: column; align-items: flex-end; gap: calc(4px * var(--card-fs)); }
 
 .ring {
   width: calc(32px * var(--card-fs)); height: calc(32px * var(--card-fs)); border-radius: 50%; flex: none;
   background: conic-gradient(var(--accent) calc(var(--progress) * 1turn), var(--border) 0);
   display: grid; place-items: center; position: relative;
 }
-.ring::after { content: ''; position: absolute; inset: 4px; border-radius: 50%; background: var(--panel-strong); }
+.ring::after { content: ''; position: absolute; inset: calc(4px * var(--card-fs)); border-radius: 50%; background: var(--panel-strong); }
 .ring b { position: relative; z-index: 1; font-size: calc(10.5px * var(--card-fs)); font-family: var(--mono); color: var(--muted); font-weight: 600; }
 
-.card-next { font-size: calc(10.5px * var(--card-fs)); color: var(--muted); letter-spacing: 0.04em; }
+.card-next { font-size: calc(10.5px * var(--card-fs)); color: var(--muted); letter-spacing: 0.04em; width: fit-content; }
 .card-next .mono { color: color-mix(in srgb, var(--muted) 75%, var(--text)); }
 
 .card-actions { position: absolute; top: calc(8px * var(--card-fs)); right: calc(8px * var(--card-fs)); display: flex; gap: calc(5px * var(--card-fs)); opacity: 0; transition: opacity var(--motion); }
 .orbit-card:hover .card-actions, .orbit-card.selected .card-actions { opacity: 1; }
 .icon-btn {
-  width: calc(26px * var(--card-fs)); height: calc(26px * var(--card-fs)); border-radius: 8px; border: 1px solid var(--border);
+  width: calc(26px * var(--card-fs)); height: calc(26px * var(--card-fs)); border-radius: calc(8px * var(--card-fs)); border: calc(1px * var(--card-fs)) solid var(--border);
   background: var(--panel-strong); color: var(--muted); display: grid; place-items: center; cursor: pointer;
 }
+.icon-btn svg { width: calc(14px * var(--card-fs)); height: calc(14px * var(--card-fs)); }
 .icon-btn:hover { color: var(--text); border-color: var(--border-strong); }
 .icon-btn.on { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 
-/* 2D grid ---------------------------------------------------------------- */
-.grid2d {
-  flex: 1; min-height: 0; overflow: auto; padding: 4px 24px 24px;
-  display: grid; gap: 14px;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  align-content: start;
+/* 2D grid: a canvas the cards lie on, like the icon view of a folder ------- */
+.grid2d { flex: 1; min-height: 0; overflow: auto; position: relative; }
+.grid2d-canvas { position: relative; min-width: 100%; min-height: 100%; }
+.grid2d-cell {
+  position: absolute; left: 0; top: 0;
+  display: grid; place-items: stretch;
+  -webkit-user-select: none; user-select: none;
 }
-.grid2d-cell { display: grid; place-items: stretch; }
-.grid2d-cell .orbit-card { width: 100%; height: 196px; }
-
-
-/* reorderable grid ------------------------------------------------------- */
-.grid2d { position: relative; }
-.grid2d.reorderable .grid2d-cell { cursor: grab; touch-action: pan-y; user-select: none; }
-/* The card itself is on the floating layer: the place it left stays visible. */
-.grid2d-cell.placeholder {
-  border: 2px dashed color-mix(in srgb, var(--accent) 45%, transparent);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-}
-.grid2d-cell.placeholder > * { visibility: hidden; }
-.card-floating {
-  position: fixed; left: 0; top: 0; z-index: 1000; pointer-events: none;
-  will-change: transform; transform-origin: 50% 50%;
-}
-.card-floating .orbit-card {
-  width: 100%; height: 100%;
+.grid2d-cell .orbit-card { width: 100%; height: 100%; }
+/* Text is for selecting: only the rest of a card moves it. */
+.grid2d-cell .card-text { -webkit-user-select: text; user-select: text; cursor: text; }
+.grid2d-cell .otp-digits { cursor: pointer; }
+.grid2d.movable .grid2d-cell { touch-action: pan-y; }
+.grid2d.movable .grid2d-cell .orbit-card { cursor: grab; }
+.grid2d.movable .grid2d-cell .card-actions, .grid2d.movable .grid2d-cell .icon-btn { cursor: pointer; }
+.grid2d.animated .grid2d-cell { transition: transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.grid2d.animated .grid2d-cell.dragging, .grid2d-cell.dragging { transition: none; z-index: 100000 !important; will-change: transform; }
+.grid2d-cell.dragging .orbit-card {
   box-shadow: 0 34px 80px rgb(0 0 0 / 0.42), 0 0 0 1px color-mix(in srgb, var(--identity) 55%, transparent);
 }
-body.card-dragging, body.card-dragging * { cursor: grabbing !important; user-select: none !important; }
+body.card-dragging, body.card-dragging * { cursor: grabbing !important; -webkit-user-select: none !important; user-select: none !important; }
+
+.stage3d-controls { position: absolute; left: 24px; top: 4px; z-index: 200000; cursor: default; }
+.stage-radius {
+  display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 550; color: var(--muted);
+  padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel);
+}
+.stage-radius input { width: 110px; }
+.stage-radius .mono { font-size: 11.5px; min-width: 38px; }
+
+.pick-list { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.pick-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; }
+.pick-row + .pick-row { border-top: 1px solid var(--border); }
+.pick-row:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.pick-row strong { display: block; font-size: 13px; }
+.pick-row .hint { display: block; }
 
 .fps-meter {
   font-size: 12px; color: var(--muted); padding: 4px 10px; border-radius: 999px;
@@ -679,7 +690,6 @@ body.card-dragging, body.card-dragging * { cursor: grabbing !important; user-sel
   .nav a span, .nav button span { display: none; }
   .segmented button span { display: none; }
   .segmented button { padding: 7px 9px; }
-  .orbit-card { width: 250px; height: 172px; }
   .focus-bar { flex-wrap: wrap; }
   .account-row { grid-template-columns: 40px 1fr auto; }
   .account-row .otp-cell { display: none; }
