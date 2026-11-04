@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 const secondListeners = new Set<() => void>()
 let secondTimer = 0
@@ -126,4 +126,51 @@ export function useResolvedTheme(theme: string): 'dark' | 'light' {
     return () => media.removeEventListener('change', apply)
   }, [theme])
   return resolved
+}
+
+const loaded = new Map<string, unknown>()
+
+/** Forgets everything useLoaded kept; the data belongs to the user who is signed in. */
+export function clearLoaded() {
+  loaded.clear()
+}
+
+/**
+ * Data of a settings screen. What was loaded before shows at once, so that coming back to
+ * a screen does not start over from nothing; `data` stays undefined until the first answer.
+ * Forms pass `refresh: false`: a later answer must not replace what is being edited.
+ */
+export function useLoaded<T>(key: string, load: () => Promise<T>, { refresh = true } = {}) {
+  const [data, setState] = useState<T | undefined>(() => loaded.get(key) as T | undefined)
+  const [error, setError] = useState('')
+  const latest = useRef(load)
+  latest.current = load
+
+  const reload = useCallback(async () => {
+    try {
+      const value = await latest.current()
+      loaded.set(key, value)
+      setState(value)
+      setError('')
+    } catch (caught) {
+      setError((caught as Error).message)
+    }
+  }, [key])
+
+  const setData = useCallback(
+    (update: (current: T) => T) => {
+      const current = loaded.get(key) as T | undefined
+      if (current === undefined) return
+      const value = update(current)
+      loaded.set(key, value)
+      setState(value)
+    },
+    [key],
+  )
+
+  useEffect(() => {
+    if (refresh || !loaded.has(key)) void reload()
+  }, [key, refresh, reload])
+
+  return { data, error, reload, setData }
 }

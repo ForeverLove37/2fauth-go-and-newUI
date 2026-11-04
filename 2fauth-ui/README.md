@@ -103,8 +103,10 @@ scripts/smoke.ts        jsdom smoke test: every display mode, theme editor, logi
 * 3D frame rate and quality are in Settings → Appearance → Motion. By default the stage
   follows the refresh rate of the display. Each frame only writes `transform` and
   `opacity`, and motion is based on elapsed time, so it runs at the same speed at any rate.
-  Frosted glass on the 3D cards is a switch in the same place, off by default. Appearance
+  Frosted glass on the cards is a switch in the same place, off by default. Appearance
   settings are kept per browser.
+* Settings fold into sections that remember being open. What a screen loaded stays until
+  sign-out, so coming back shows it at once; nothing is drawn before the first answer.
 * `showOtpAsDot`, `showNextOtp` and `theme` come from user preferences and are written
   through `PUT /api/v1/user/preferences/{key}`.
 * Deleting, sharing and importing reuse the same endpoints as the Vue SPA, so both

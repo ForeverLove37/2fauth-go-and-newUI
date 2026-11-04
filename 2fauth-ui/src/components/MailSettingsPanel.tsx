@@ -1,33 +1,32 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api, type MailSettings } from '../api/client'
 import type { ApiError } from '../api/types'
 import { useT } from '../i18n'
+import { useLoaded } from '../lib/hooks'
 import { useStore } from '../store/useStore'
+import Menu from './Menu'
 
 /** SMTP transport of the instance: password resets, confirmations and alerts. */
 export default function MailSettingsPanel() {
   const t = useT()
+  const { data, error, setData } = useLoaded('mail-settings', () => api.mailSettings(), { refresh: false })
+  if (!data) return <p className="hint">{error || t('Loading…')}</p>
+  return <MailForm loaded={data} onSaved={(saved) => setData(() => saved)} />
+}
+
+function MailForm({ loaded, onSaved }: { loaded: MailSettings; onSaved: (saved: MailSettings) => void }) {
+  const t = useT()
   const toast = useStore((state) => state.toast)
   const user = useStore((state) => state.user)
-  const [settings, setSettings] = useState<MailSettings | null>(null)
+  const [settings, setSettings] = useState(loaded)
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
 
-  useEffect(() => {
-    void api
-      .mailSettings()
-      .then(setSettings)
-      .catch((caught: ApiError) => setStatus(caught.message))
-  }, [])
-
-  if (!settings) return <p className="hint">{status || t('Loading…')}</p>
-
   const change = <K extends keyof MailSettings>(key: K, value: MailSettings[K]) =>
-    setSettings((current) => (current ? { ...current, [key]: value } : current))
+    setSettings((current) => ({ ...current, [key]: value }))
 
   async function save() {
-    if (!settings) return
     setBusy(true)
     setStatus('')
     try {
@@ -43,6 +42,7 @@ export default function MailSettingsPanel() {
         ...(password ? { password } : {}),
       })
       setSettings(updated)
+      onSaved(updated)
       setPassword('')
       toast('success', t('Mail settings saved'))
     } catch (caught) {
@@ -55,7 +55,9 @@ export default function MailSettingsPanel() {
   async function clearPassword() {
     setBusy(true)
     try {
-      setSettings(await api.saveMailSettings({ clear_password: true }))
+      const updated = await api.saveMailSettings({ clear_password: true })
+      setSettings(updated)
+      onSaved(updated)
       toast('success', t('Mail settings saved'))
     } catch (caught) {
       setStatus((caught as ApiError).message)
@@ -199,9 +201,7 @@ export default function MailSettingsPanel() {
               {t('Send a test e-mail')}
             </button>
             {settings.password_set && (
-              <button className="btn ghost" onClick={() => void clearPassword()} disabled={busy}>
-                {t('Remove the stored password')}
-              </button>
+              <Menu items={[{ label: t('Remove the stored password'), icon: 'trash', danger: true, onClick: () => void clearPassword() }]} />
             )}
           </div>
           {status && (

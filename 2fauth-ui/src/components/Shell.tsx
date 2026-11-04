@@ -1,8 +1,7 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useT } from '../i18n'
+import { isAdminTab } from '../lib/settingsTabs'
 import { useStore } from '../store/useStore'
-import { presets } from '../theme/presets'
-import { useThemeStore } from '../theme/store'
 import Icon from './Icon'
 
 function initials(name: string): string {
@@ -23,19 +22,13 @@ export default function Shell() {
   const toasts = useStore((state) => state.toasts)
   const dismiss = useStore((state) => state.dismiss)
   const navigate = useNavigate()
-  const theme = useThemeStore((state) => state.theme)
-  const usePreset = useThemeStore((state) => state.usePreset)
+  const location = useLocation()
+  const onSettings = location.pathname === '/settings'
+  const onAdmin = onSettings && isAdminTab(new URLSearchParams(location.search).get('tab'))
 
   async function signOut() {
     await logout()
     navigate('/login', { replace: true })
-  }
-
-  function cycleTheme() {
-    const index = presets.findIndex((preset) => preset.id === theme.id)
-    const next = presets[(index + 1) % presets.length]
-    usePreset(next.id)
-    navigate('/settings?tab=theme')
   }
 
   return (
@@ -54,11 +47,11 @@ export default function Shell() {
             <NavLink to="/" end>
               <Icon name="orbit" size={15} /> <span>{t('Panel')}</span>
             </NavLink>
-            <NavLink to="/settings">
+            <NavLink to="/settings" className={() => (onSettings && !onAdmin ? 'active' : '')}>
               <Icon name="sliders" size={15} /> <span>{t('Settings')}</span>
             </NavLink>
             {user?.is_admin && (
-              <NavLink to="/settings?tab=admin">
+              <NavLink to="/settings?tab=admin" className={() => (onAdmin ? 'active' : '')}>
                 <Icon name="shield" size={15} /> <span>{t('Admin')}</span>
               </NavLink>
             )}
@@ -67,14 +60,7 @@ export default function Shell() {
           <div className="spacer" />
 
           <div className="flex">
-            <button
-              className="btn icon ghost"
-              onClick={cycleTheme}
-              title={t('Theme: {name} — click for the next one', { name: theme.name })}
-            >
-              <Icon name="eye" size={15} />
-            </button>
-            <button className="avatar" title={user ? `${user.name} · ${user.email}` : ''} onClick={() => navigate('/settings')}>
+            <button className="avatar" title={user ? `${user.name} · ${user.email}` : ''} onClick={() => navigate('/settings?tab=account')}>
               {initials(user?.name ?? '?')}
             </button>
             <button className="btn icon ghost" onClick={signOut} title={t('Sign out')}>

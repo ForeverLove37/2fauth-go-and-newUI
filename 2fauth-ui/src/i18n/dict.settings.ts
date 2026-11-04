@@ -7,6 +7,7 @@ export const settings: Record<string, string> = {
   'Security': '安全',
   'Single sign-on': '单点登录',
   'Admin': '管理',
+  'General': '常规',
 
   // Options tab
   'Behavior and preferences': '行为与偏好',
@@ -205,7 +206,7 @@ export const settings: Record<string, string> = {
   'Always sharp': '始终清晰',
   'Performance (highest frame rate)': '性能优先（帧率最高）',
   'Show the frame rate': '显示帧率',
-  'Frosted glass on 3D cards': '3D 卡片毛玻璃',
+  'Frosted glass on cards': '卡片毛玻璃',
   'Frosted glass can lower the frame rate, more so with many cards. Its strength follows the backdrop blur setting.':
     '毛玻璃可能降低帧率，卡片越多越明显。模糊强度由「毛玻璃模糊」设置决定。',
   'A browser never draws faster than the refresh rate of the display, so 144 FPS needs a 144 Hz monitor enabled in the system settings.': '浏览器的绘制速度不会超过显示器刷新率，所以要达到 144 FPS，需要 144 Hz 显示器，并在系统设置中启用该刷新率。',
@@ -236,4 +237,15 @@ export const settings: Record<string, string> = {
   'Usage': '用法',
   'Host key fingerprint, to compare on the first connection:': '主机密钥指纹，首次连接时请核对：',
   'No SSH key yet.': '还没有 SSH 密钥。',
+  'More actions': '更多操作',
+  'Registrations closed': '已关闭注册',
+  'Registrations open': '开放注册',
+  'SSO required': '必须单点登录',
+  'Password or SSO': '密码或单点登录',
+  'Add user': '添加用户',
+  'Reset password': '重置密码',
+  'Advanced': '高级',
+  'Choose a provider': '选择提供方',
+  'Format': '格式',
+  'Export': '导出',
 }

@@ -417,6 +417,7 @@ export default function Dashboard() {
             count={visible.length}
             autoRotate={autoRotate}
             fps={motion.fps ?? 0}
+            glass={motion.glass ?? false}
             focusIndex={focusIndex >= 0 ? focusIndex : null}
             onBackgroundClick={() => setFocusedId(null)}
             items={visible.map((account) => cardFor(account))}

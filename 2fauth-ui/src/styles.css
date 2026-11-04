@@ -9,6 +9,7 @@
   --app-bg: linear-gradient(160deg, #05070f, #080d18);
   --panel: rgba(16, 23, 39, 0.72);
   --panel-strong: rgba(11, 17, 30, 0.92);
+  --glass-tint: rgba(16, 23, 39, 0.36);
   --card-grad: linear-gradient(150deg, rgba(30, 44, 72, 0.92), rgba(9, 14, 26, 0.9));
   --border: rgba(120, 160, 255, 0.18);
   --border-strong: rgba(158, 192, 255, 0.42);
@@ -188,6 +189,39 @@ a { color: var(--accent-2); text-decoration: none; }
 .panel-head p { margin: 3px 0 0; font-size: 12.5px; color: var(--muted); }
 .panel-body { padding: 20px 22px; }
 
+.section-head { display: flex; align-items: center; }
+.section.open .section-head { border-bottom: 1px solid var(--border); }
+.section-toggle {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px;
+  padding: 15px 22px; border: 0; background: none; color: inherit; font: inherit;
+  text-align: left; cursor: pointer; border-radius: var(--radius);
+}
+.section-toggle h2 { margin: 0; font-size: 15px; letter-spacing: 0.01em; }
+.section-toggle p { margin: 3px 0 0; font-size: 12.5px; color: var(--muted); font-weight: 400; }
+.section-toggle:hover h2 { color: var(--accent); }
+.section-summary { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.section-chevron { display: inline-flex; color: var(--muted); transition: transform var(--motion) ease; }
+.section-toggle[aria-expanded='true'] .section-chevron { transform: rotate(180deg); }
+.section-actions { display: flex; gap: 8px; padding-right: 18px; }
+
+.menu-pop {
+  position: fixed; z-index: 2000; min-width: 170px; padding: 5px;
+  background: var(--panel-strong); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow);
+}
+.menu-pop button {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 10px;
+  border: 0; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left;
+  border-radius: calc(var(--radius-sm) - 3px); cursor: pointer; white-space: nowrap;
+}
+.menu-pop button:hover, .menu-pop button:focus-visible { background: color-mix(in srgb, var(--accent-2) 18%, transparent); outline: 0; }
+.menu-pop button.danger { color: var(--danger); }
+
+.fold { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
+.fold > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); }
+.fold > summary:hover { color: var(--text); }
+.fold[open] > summary { margin-bottom: 4px; }
+
 .field { display: flex; flex-direction: column; gap: 7px; margin-bottom: 15px; }
 .field label { font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
 .input, .select, textarea {
@@ -267,17 +301,28 @@ textarea { resize: vertical; min-height: 110px; font-family: var(--mono); font-s
     var(--bg);
   transition: box-shadow var(--motion) ease, border-color var(--motion) ease;
 }
-/* Frosted glass is optional. The blur sits on the item and not on the card, because
-   the opacity of the item would cut the card off from what is behind it. */
+/* Frosted glass, optional. A real pane blurs fully at any depth: only the card on top of
+   the blur fades, otherwise a faded card shows a sharp double image of what is behind it.
+   Barely visible cards skip the blur, which also keeps a pile of them from turning to fog. */
 [data-glass='on'] .stage3d-item {
   border-radius: var(--radius);
-  backdrop-filter: blur(calc(var(--blur) * 0.6));
+  backdrop-filter: blur(var(--blur)) saturate(1.5);
 }
-[data-glass='on'] .stage3d .orbit-card {
+[data-glass='on'] .stage3d-item[data-tier='far'],
+[data-glass='on'] .stage3d.has-focus .stage3d-item:not(.is-focus) { backdrop-filter: none; }
+[data-glass='on'] .stage3d .orbit-card { backdrop-filter: none; will-change: opacity; }
+[data-glass='on'] .orbit-card {
   background:
-    linear-gradient(160deg, color-mix(in srgb, var(--identity) 16%, transparent), transparent 70%),
-    var(--card-grad);
+    linear-gradient(160deg, color-mix(in srgb, var(--identity) 18%, transparent), transparent 62%),
+    linear-gradient(180deg, color-mix(in srgb, #ffffff 9%, transparent), transparent 42%),
+    var(--glass-tint);
 }
+[data-glass='on'] .orbit-card:not(.selected) {
+  border-color: color-mix(in srgb, #ffffff 20%, var(--border));
+  box-shadow: 0 18px 44px rgb(0 0 0 / 0.26), inset 0 1px 0 color-mix(in srgb, #ffffff 24%, transparent);
+}
+[data-glass='on'] .grid2d .orbit-card,
+[data-glass='on'] .card-floating .orbit-card { backdrop-filter: blur(var(--blur)) saturate(1.5); }
 /* The back of the scene shows who, not details. */
 .stage3d-item[data-tier='far'] .card-flags,
 .stage3d-item[data-tier='far'] .card-next,

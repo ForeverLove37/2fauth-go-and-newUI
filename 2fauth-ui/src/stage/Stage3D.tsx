@@ -10,6 +10,8 @@ interface Stage3DProps {
   className?: string
   /** frame rate cap, 0 for the refresh rate of the display */
   fps?: number
+  /** frosted glass: the blur stays on the item, so only the card itself may fade */
+  glass?: boolean
   /** the card brought to the front; all the others fade */
   focusIndex?: number | null
   /** a click that landed on no card */
@@ -58,6 +60,7 @@ export default function Stage3D({
   zoom = 1,
   className = '',
   fps = 0,
+  glass = false,
   focusIndex = null,
   onBackgroundClick,
   onDragStateChange,
@@ -69,7 +72,7 @@ export default function Stage3D({
   const lods = useRef<number[]>([])
   const tiers = useRef<string[]>([])
   const focusAmount = useRef<number[]>([])
-  const written = useRef<{ transform: string; opacity: string; z: number }[]>([])
+  const written = useRef<{ transform: string; z: number }[]>([])
   const drag = useRef<DragState>({ active: false, moved: 0, lastX: 0, lastY: 0, vx: 0, vy: 0 })
   const hovered = useRef(false)
   const focus = useRef<number | null>(focusIndex)
@@ -320,18 +323,17 @@ export default function Stage3D({
 
           const residual = clamp(scale / LOD_STEPS[bucket], 0.25, 1.2)
           const transform = `translate(-50%, -50%) translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) scale(${residual.toFixed(3)})`
-          const opacityText = opacity.toFixed(3)
+          // written the way the browser reads it back
+          const opacityText = String(Number(opacity.toFixed(3)))
           const z = amount > 0.01 ? 100000 : Math.round(50000 - depths[index])
 
-          const before = written.current[index] ?? (written.current[index] = { transform: '', opacity: '', z: 0 })
+          const before = written.current[index] ?? (written.current[index] = { transform: '', z: 0 })
           if (before.transform !== transform) {
             before.transform = transform
             element.style.transform = transform
           }
-          if (before.opacity !== opacityText) {
-            before.opacity = opacityText
-            element.style.opacity = opacityText
-          }
+          const faded = glass ? ((element.firstElementChild as HTMLElement | null) ?? element) : element
+          if (faded.style.opacity !== opacityText) faded.style.opacity = opacityText
           if (before.z !== z) {
             before.z = z
             element.style.zIndex = String(z)
@@ -343,7 +345,12 @@ export default function Stage3D({
 
     frame = requestAnimationFrame(render)
     return () => cancelAnimationFrame(frame)
-  }, [points, focal, count, fps])
+  }, [points, focal, count, fps, glass])
+
+  // A card replaced by another one starts without its opacity.
+  useEffect(() => {
+    if (glass) state.current.dirty = true
+  })
 
   function onPointerDown(event: React.PointerEvent) {
     if (event.pointerType === 'mouse' && event.button !== 0) return

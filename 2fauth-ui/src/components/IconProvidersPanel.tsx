@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
-import { api, type IconProvider } from '../api/client'
+import { useState } from 'react'
+import { api, type IconProvider, type IconProvidersResponse } from '../api/client'
 import { useT } from '../i18n'
+import { useLoaded } from '../lib/hooks'
 import { useStore } from '../store/useStore'
 import Icon from './Icon'
 
@@ -20,23 +21,17 @@ function sortChain(providers: IconProvider[]): IconProvider[] {
 
 export default function IconProvidersPanel() {
   const t = useT()
-  const toast = useStore((state) => state.toast)
-  const [providers, setProviders] = useState<IconProvider[]>([])
-  const [maxTries, setMaxTries] = useState(3)
-  const [busy, setBusy] = useState(false)
+  const { data, error, setData } = useLoaded('icon-providers', () => api.iconProviders(), { refresh: false })
+  if (!data) return <p className="hint">{error || t('Loading…')}</p>
+  return <IconProvidersForm loaded={data} onSaved={(saved) => setData(() => saved)} />
+}
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const loaded = await api.iconProviders()
-        setProviders(sortChain(loaded.providers))
-        setMaxTries(loaded.max_tries)
-      } catch (error) {
-        toast('error', (error as Error).message)
-      }
-    })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+function IconProvidersForm({ loaded, onSaved }: { loaded: IconProvidersResponse; onSaved: (saved: IconProvidersResponse) => void }) {
+  const t = useT()
+  const toast = useStore((state) => state.toast)
+  const [providers, setProviders] = useState(() => sortChain(loaded.providers))
+  const [maxTries, setMaxTries] = useState(loaded.max_tries)
+  const [busy, setBusy] = useState(false)
 
   function move(index: number, delta: number) {
     const next = [...providers]
@@ -65,6 +60,7 @@ export default function IconProvidersPanel() {
       })
       setProviders(sortChain(saved.providers))
       setMaxTries(saved.max_tries)
+      onSaved(saved)
       toast('success', t('Icon libraries updated'))
     } catch (error) {
       toast('error', (error as Error).message)
@@ -85,24 +81,12 @@ export default function IconProvidersPanel() {
   const enabledCount = providers.filter((item) => item.enabled).length
 
   return (
-    <div className="panel">
-      <div className="panel-head">
-        <div>
-          <h2>{t('Icon libraries')}</h2>
-          <p>
-            {t(
-              'When an icon is fetched the libraries are tried in order; the first hit wins and the rest act as fallbacks.',
-            )}
-          </p>
-        </div>
-      </div>
-      <div className="panel-body">
+    <>
         <table className="table">
           <thead>
             <tr>
               <th>{t('Order')}</th>
               <th>{t('Library')}</th>
-              <th>{t('Source')}</th>
               <th>{t('Enabled')}</th>
               <th />
             </tr>
@@ -112,11 +96,8 @@ export default function IconProvidersPanel() {
               <tr key={provider.id} className={provider.enabled ? '' : 'muted'}>
                 <td className="mono small">{index + 1}</td>
                 <td>
-                  <strong>{provider.label}</strong>
-                  <div className="hint mono small">{provider.id}</div>
-                </td>
-                <td className="hint small mono" title={provider.template}>
-                  {provider.source}
+                  <strong title={provider.template}>{provider.label}</strong>
+                  <div className="hint mono small">{provider.source}</div>
                 </td>
                 <td>
                   <button
@@ -166,7 +147,6 @@ export default function IconProvidersPanel() {
         <button className="btn ghost small" onClick={() => void fillNow()} style={{ marginTop: 10, marginLeft: 8 }}>
           <Icon name="refresh" size={14} /> {t('Fetch missing icons now')}
         </button>
-      </div>
-    </div>
+    </>
   )
 }

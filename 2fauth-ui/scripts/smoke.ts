@@ -221,22 +221,36 @@ async function main() {
   )
   await tick(180)
   const tabLabels = [...settingsHost.querySelectorAll('.tabs button')].map((element) => element.textContent ?? '')
-  assert('settings tabs include 外观 / 单点登录 / 管理', ['外观', '单点登录', '管理'].every((label) => tabLabels.includes(label)))
+  assert('personal settings show 外观 / 选项 / 账号 / 安全', ['外观', '选项', '账号', '安全'].every((label) => tabLabels.some((text) => text.includes(label))))
+  assert('personal settings keep the admin tabs out', !tabLabels.some((text) => text.includes('单点登录')))
+  assert('only the first appearance section starts open', settingsHost.querySelectorAll('.section-toggle[aria-expanded="true"]').length === 1)
 
-  const ssoTab = [...settingsHost.querySelectorAll('.tabs button')].find((element) =>
+  const adminHost = window.document.createElement('div')
+  window.document.body.appendChild(adminHost)
+  createRoot(adminHost).render(
+    createElement(MemoryRouter, { initialEntries: ['/settings?tab=admin'] }, createElement(Settings)),
+  )
+  await tick(180)
+  const adminLabels = [...adminHost.querySelectorAll('.tabs button')].map((element) => element.textContent ?? '')
+  assert('admin settings show 常规 / 单点登录 / 邮件', adminLabels.length === 3 && adminLabels.some((text) => text.includes('单点登录')))
+
+  const ssoTab = [...adminHost.querySelectorAll('.tabs button')].find((element) =>
     element.textContent?.includes('单点登录'),
   ) as HTMLButtonElement | undefined
   ssoTab?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
   await tick(200)
-  const issuerInput = [...settingsHost.querySelectorAll('input')].find((element) =>
+  const issuerInput = [...adminHost.querySelectorAll('input')].find((element) =>
     (element as HTMLInputElement).placeholder.includes('keycloak.example.com'),
   ) as HTMLInputElement | undefined
   assert('SSO panel shows the issuer field', Boolean(issuerInput))
   assert('SSO panel preloads the stored issuer', issuerInput?.value === 'https://keycloak.example.com/realms/main')
-  assert('SSO panel lists provider presets', settingsHost.textContent?.includes('Keycloak') === true)
+  assert('SSO panel lists provider presets', adminHost.textContent?.includes('Keycloak') === true)
+  const keycloakToggle = [...adminHost.querySelectorAll('.section-toggle')].find((element) => /Keycloak/.test(element.textContent ?? '')) as HTMLButtonElement | undefined
+  keycloakToggle?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(60)
   assert(
-    'SSO panel has the three Keycloak export buttons',
-    [...settingsHost.querySelectorAll('button')].filter((element) => /JSON|导入|kcadm|脚本/.test(element.textContent ?? '')).length >= 3,
+    'SSO panel offers the three Keycloak export formats',
+    [...adminHost.querySelectorAll('option')].filter((element) => /JSON|kcadm|Realm/.test(element.textContent ?? '')).length >= 3,
   )
 
   // a light preset must switch the document theme
@@ -248,6 +262,9 @@ async function main() {
   assert('light preset sets data-theme="light"', window.document.documentElement.dataset.theme === 'light')
 
   // background scenery: every style is selectable and applies immediately
+  const sceneryToggle = [...editorHost.querySelectorAll('.section-toggle')].find((element) => /背景场景|Background scenery/.test(element.textContent ?? '')) as HTMLButtonElement | undefined
+  sceneryToggle?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(60)
   const sceneryTiles = [...editorHost.querySelectorAll('.scenery-tile')]
   assert('theme editor offers 7 background styles', sceneryTiles.length >= 7)
   const nebulaTile = sceneryTiles.find((element) => element.textContent?.includes('星云')) as HTMLButtonElement | undefined

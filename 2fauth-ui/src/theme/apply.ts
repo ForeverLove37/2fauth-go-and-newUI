@@ -73,6 +73,7 @@ export function themeToVars(theme: ThemeConfig): Record<string, string> {
     '--app-bg': appBackground,
     '--panel': panel,
     '--panel-strong': panelStrong,
+    '--glass-tint': toRgba(palette.panel, palette.panelAlpha * 0.5),
     '--card-grad': `linear-gradient(150deg, ${cardTop}, ${cardBottom})`,
     '--border': toRgba(palette.border, dark ? 0.18 : 0.2),
     '--border-strong': toRgba(palette.borderStrong, dark ? 0.42 : 0.45),

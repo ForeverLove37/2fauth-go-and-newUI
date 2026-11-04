@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import Shell from './components/Shell'
 import { useI18nStore, useT } from './i18n'
 import { Login, PasswordLost, PasswordReset, Register } from './views/Auth'
+import { clearLoaded } from './lib/hooks'
 import { useStore } from './store/useStore'
 
 import Backdrop from './three/Backdrop'
@@ -56,6 +57,10 @@ export default function App() {
   useEffect(() => {
     void boot()
   }, [boot])
+
+  // what the settings screens loaded belongs to this user
+  const userId = user?.id
+  useEffect(() => clearLoaded(), [userId])
 
   // the language preference lives on the server; adopt it when nothing local was
   // chosen yet, and push a locally chosen language to the server after signing in
