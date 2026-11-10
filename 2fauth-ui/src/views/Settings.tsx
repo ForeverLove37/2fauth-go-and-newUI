@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import type { ApiError } from '../api/types'
 import Icon from '../components/Icon'
@@ -364,6 +364,9 @@ function SecurityTab() {
         hint={t('Use them as `Authorization: Bearer <token>` for scripts and the CLI.')}
         summary={tokens ? String(tokens.length) : undefined}
       >
+        <p className="hint small" style={{ margin: '0 0 12px' }}>
+          <Link to="/agents">{t('Guide for AI agents and scripts')} →</Link>
+        </p>
         <div className="flex" style={{ marginBottom: 14 }}>
           <input
             className="input grow"

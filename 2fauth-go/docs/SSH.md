@@ -24,6 +24,19 @@ first time a machine connects.
 `ALLOWED_CLIENT_IPS` applies to this port as it does to HTTPS: other addresses are
 disconnected before anything is read.
 
+When clients reach the service through another address or port (a tunnel, a port
+forward), set `SSH_PUBLIC_ADDR=host:port`: the panel and the agent guide show that
+address instead of the host of `APP_URL` and the listening port.
+
+## AI agents
+
+The server publishes a guide for AI agents and scripts at `/agents.md` (also
+`/llms.txt`), filled with the real address, port and host key fingerprint of the
+instance; `/agents` shows it to people. It tells an agent to create a key of its own, ask
+the user to register it, record the host key after checking its fingerprint, and use
+`get <id> --json`. Give an agent the address of that file rather than instructions of
+your own.
+
 ## Registering a machine
 
 1. On the machine, print its public key. Create one first if there is none:

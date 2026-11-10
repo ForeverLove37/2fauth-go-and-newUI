@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Home servers are often reached over plain http on the local network; the sign-in
+  screen warns about it. Self-signed certificates are trusted one by one by the app,
+  after the user has checked their fingerprint, not through this file.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

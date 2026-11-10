@@ -180,4 +180,19 @@ export const common: Record<string, string> = {
   'Fetch official icon': '获取官方图标',
   'Remove icon': '移除图标',
   'Enter the service name first': '请先填写服务名称',
+
+  // agent guide
+  'Agent guide': 'Agent 接入指南',
+  'One-time passwords for AI agents and scripts': '给 AI agent 和脚本取验证码',
+  'Guide for AI agents and scripts': '给 AI agent 和脚本的接入指南',
+  'Read {url} and follow it to get one-time passwords from my 2FAuth server.':
+    '阅读 {url}，按其中的说明从我的 2FAuth 服务器获取一次性验证码。',
+  'Give this address to an agent: it explains, with the real addresses of this server, how to get a code over SSH or with a token. The agent still needs a key or a token that you grant it.':
+    '把这个地址交给 agent：文档会用本服务器的真实地址说明如何通过 SSH 或令牌获取验证码。agent 仍然需要你授予的 SSH 密钥或令牌才能取码。',
+  'Copy an instruction for the agent': '复制给 agent 的指令',
+  'Copy the address': '复制地址',
+  'Instruction copied': '指令已复制',
+  'Address copied': '地址已复制',
+  'Manage SSH keys and tokens': '管理 SSH 密钥和令牌',
+  Copied: '已复制',
 }

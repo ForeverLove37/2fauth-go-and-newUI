@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The favicon of the web panel: a gradient frame around "2F". -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#00000000"
+        android:strokeWidth="2.6"
+        android:pathData="M43,27 H65 A16,16 0 0 1 81,43 V65 A16,16 0 0 1 65,81 H43 A16,16 0 0 1 27,65 V43 A16,16 0 0 1 43,27 Z">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="27" android:startY="27" android:endX="81" android:endY="81">
+                <item android:offset="0" android:color="#FF55E6C1" />
+                <item android:offset="0.55" android:color="#FF6EA8FF" />
+                <item android:offset="1" android:color="#FFB07CFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:fillColor="#00000000"
+        android:strokeWidth="4.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M37,50 C37,45.5 40.5,43 44,43 C48,43 51,45.5 51,49.5 C51,53 48.5,55 45.5,57.5 L37,65 L51.5,65 M58,65 L58,43 L71,43 M58,54 L68.5,54">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="37" android:startY="43" android:endX="71" android:endY="65">
+                <item android:offset="0" android:color="#FF55E6C1" />
+                <item android:offset="0.55" android:color="#FF6EA8FF" />
+                <item android:offset="1" android:color="#FFB07CFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

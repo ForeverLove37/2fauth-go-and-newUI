@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">2FAuth</string>
+    <string name="tagline">2FA codes</string>
+
+    <!-- sign in -->
+    <string name="server_title">Your 2FAuth server</string>
+    <string name="server_label">Server address</string>
+    <string name="http_warning">Without https, your password and codes cross the network in clear text. Use it only on a network you trust.</string>
+    <string name="continue_action">Continue</string>
+    <string name="change_server">Change server</string>
+    <string name="sign_in">Sign in</string>
+    <string name="sign_in_sso">Sign in with SSO</string>
+    <string name="admin_password">Administrator? Sign in with a password</string>
+    <string name="email">E-mail</string>
+    <string name="password">Password</string>
+    <string name="use_token">Use a personal access token</string>
+    <string name="use_password">Use e-mail and password</string>
+    <string name="token_label">Personal access token</string>
+    <string name="token_help">Create one in the web panel: Settings → Security → Personal access tokens.</string>
+    <string name="login_footer">The app keeps no secret on the phone: codes are computed by your server.\nAfter signing in it uses a token of its own, which you can revoke from the web panel.</string>
+    <string name="cert_title">Untrusted certificate</string>
+    <string name="cert_text">This server presents a certificate no authority vouches for, such as a self-signed one. Trust it only if this fingerprint is the one of your server.</string>
+    <string name="cert_text_name">The certificate of this server is not issued for this address. Trust it only if this fingerprint is the one of your server.</string>
+    <string name="cert_trust">Trust this certificate</string>
+    <string name="sso_failed">Single sign-on failed</string>
+    <string name="sso_cancelled">Single sign-on cancelled</string>
+    <string name="session_expired">You have been signed out. Sign in again.</string>
+
+    <!-- errors -->
+    <string name="error_credentials">Wrong e-mail or password.</string>
+    <string name="error_forbidden_ip">This server does not accept connections from this network.</string>
+    <string name="error_not_2fauth">No 2FAuth server answers at this address.</string>
+    <string name="error_unknown_host">This address cannot be found.</string>
+    <string name="error_unreachable">The server cannot be reached.</string>
+    <string name="error_tls">Secure connection failed: %1$s</string>
+
+    <!-- accounts -->
+    <string name="search">Search</string>
+    <string name="search_hint">Service or account</string>
+    <string name="clear">Clear</string>
+    <string name="show_all_codes">Show every code</string>
+    <string name="hide_all_codes">Hide every code</string>
+    <string name="lock_now">Lock now</string>
+    <string name="settings">Settings</string>
+    <string name="all">All</string>
+    <string name="pinned">Pinned</string>
+    <string name="shared">Shared</string>
+    <string name="everyone">Everyone</string>
+    <string name="borrowed">Borrowed</string>
+    <string name="retry">Retry</string>
+    <string name="loading">Loading…</string>
+    <string name="no_accounts">No account yet.</string>
+    <string name="no_match">No account matches.</string>
+    <string name="add_account">Add an account</string>
+    <string name="next_code">next %1$s</string>
+    <string name="tap_copy">copy the code</string>
+    <string name="tap_generate">Tap to generate a code</string>
+    <string name="copied">Code copied</string>
+    <string name="copied_expiring">Code copied — it expires in %1$d s</string>
+    <string name="hint_gestures">Tap a card to copy its code · hold it for more</string>
+
+    <!-- account sheet -->
+    <string name="copy_code">Copy the code</string>
+    <string name="copy_next_code">Copy the next code</string>
+    <string name="pin">Pin</string>
+    <string name="unpin">Unpin</string>
+    <string name="move_to_group">Move to a group</string>
+    <string name="no_group">No group</string>
+    <string name="delete">Delete</string>
+    <string name="delete_title">Delete %1$s?</string>
+    <string name="delete_text">The account and its secret are removed from the server. Make sure two-factor authentication can still be used on that service another way.</string>
+    <string name="cancel">Cancel</string>
+    <string name="back">Back</string>
+
+    <!-- add -->
+    <string name="scan_qr">Scan a QR code</string>
+    <string name="scan_qr_hint">Take a photo of the code the service shows</string>
+    <string name="from_image">From a picture</string>
+    <string name="from_image_hint">A screenshot or a saved QR code</string>
+    <string name="paste_link">Paste a link</string>
+    <string name="paste_link_hint">otpauth:// link, or an export of another app</string>
+    <string name="manual">Enter it by hand</string>
+    <string name="manual_hint">Service, account and secret key</string>
+    <string name="link_label">Link or export</string>
+    <string name="link_help">An otpauth:// link adds one account. Exports of Google Authenticator, Aegis, 2FAS and others import all their accounts.</string>
+    <string name="image_unreadable">This picture cannot be read.</string>
+    <string name="service">Service</string>
+    <string name="account_name">Account</string>
+    <string name="secret">Secret key</string>
+    <string name="group">Group</string>
+    <string name="show_advanced">Advanced options</string>
+    <string name="hide_advanced">Hide advanced options</string>
+    <string name="digits">Digits</string>
+    <string name="period">Period (s)</string>
+    <string name="counter">Counter</string>
+    <string name="add">Add</string>
+    <string name="added">%1$s added</string>
+    <string name="import_title">Import these accounts?</string>
+    <string name="import_text">This is an export holding one or more accounts. The ones you already have are skipped.</string>
+    <string name="import_action">Import</string>
+    <string name="import_result">Imported %1$d, already there %2$d, unreadable %3$d</string>
+
+    <!-- settings -->
+    <string name="section_account">Account</string>
+    <string name="section_security">Security</string>
+    <string name="section_display">Display</string>
+    <string name="section_more">More</string>
+    <string name="connected_token">Signed in with a personal access token</string>
+    <string name="connected_session">Signed in with a session: it ends after two idle hours</string>
+    <string name="pinned_certificate">Trusted certificate</string>
+    <string name="app_lock">App lock</string>
+    <string name="app_lock_hint">Fingerprint, face or the screen lock of the phone</string>
+    <string name="app_lock_unavailable">Set a screen lock on the phone to use it</string>
+    <string name="lock_after">Lock after</string>
+    <string name="immediately">Immediately</string>
+    <string name="block_screenshots">Block screenshots</string>
+    <string name="block_screenshots_hint">Also hides the codes in the recent apps</string>
+    <string name="clipboard_clear">Clear copied codes after</string>
+    <string name="never">Never</string>
+    <string name="hide_codes">Hide codes</string>
+    <string name="hide_codes_hint">Tap a card to show its code for 5 s. Synced with the web panel</string>
+    <string name="show_next">Show the next code</string>
+    <string name="show_icons">Show service icons</string>
+    <string name="synced_hint">Synced with the web panel</string>
+    <string name="split_digits">Split codes in two</string>
+    <string name="split_digits_hint">123 456 reads more easily than 123456</string>
+    <string name="open_web">Open the web panel</string>
+    <string name="sign_out">Sign out</string>
+    <string name="sign_out_text">The token this app created is revoked on the server. A token you pasted stays valid until you revoke it in the web panel.</string>
+
+    <!-- lock -->
+    <string name="locked">Locked</string>
+    <string name="locked_hint">Unlock to see your codes</string>
+    <string name="unlock">Unlock</string>
+    <string name="unlock_title">Unlock 2FAuth</string>
+</resources>

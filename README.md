@@ -10,6 +10,7 @@
 .
 ├── 2fauth-go/       Go 后端、API、数据库、认证和 OTP 逻辑
 ├── 2fauth-ui/       React + TypeScript 前端面板
+├── 2fauth-android/  原生 Android 客户端（Kotlin + Jetpack Compose）
 ├── Dockerfile       构建前后端的多阶段镜像
 └── .github/         CI：测试、三种数据库、漏洞扫描
 ```
@@ -31,6 +32,8 @@
 - OpenID Connect 登录、PKCE 和 provider discovery
 - 图标上传、删除和可配置的图标 provider chain；没有图标的账户会在后台自动获取
 - 通过 SSH 公钥在命令行读取验证码，每个密钥有自己的权限范围，详见 [`docs/SSH.md`](2fauth-go/docs/SSH.md)
+- 给 AI agent 和脚本的接入文档：服务器在 `/agents.md`（同时在 `/llms.txt`）按本实例的真实地址、SSH 端口和主机指纹生成，网页 `/agents` 是给人看的版本
+- 原生 Android 客户端，风格与网页一致，详见 [`2fauth-android/README.md`](2fauth-android/README.md)
 - React 面板中的列表、网格和 3D 展示模式；验证码默认隐藏，鼠标移上去显示 5 秒，可一键全部显示
 - 主题编辑、语言切换和本地主题配置
 
@@ -111,7 +114,11 @@ docker run -p 8000:8000 -v 2fauth-data:/data -e APP_KEY=base64:... -e APP_URL=ht
 ssh -p 2222 otp@your-server get github
 ```
 
-详见 [docs/SSH.md](2fauth-go/docs/SSH.md)。`ALLOWED_CLIENT_IPS` 同样限制这个端口。
+详见 [docs/SSH.md](2fauth-go/docs/SSH.md)。`ALLOWED_CLIENT_IPS` 同样限制这个端口。如果客户端要通过别的地址或端口才能连到 SSH 服务（隧道、端口转发），设置 `SSH_PUBLIC_ADDR=host:port`，面板和 agent 文档里显示的就是这个地址。
+
+### 让 AI agent 取验证码
+
+把 `https://your-server/agents.md` 交给 agent（网页 `/agents` 上有「复制给 agent 的指令」按钮）。文档会告诉它如何生成自己的 SSH 密钥、请你登记公钥并选择可读的账户，以及如何调用命令和处理过期、HOTP 计数器等细节。agent 自己无法获得权限，必须由你在「设置 → 安全」里授予 SSH 密钥（推荐，只读且限定范围）或个人访问令牌（拥有账户全部权限）。
 
 ### 只允许特定地址访问
 

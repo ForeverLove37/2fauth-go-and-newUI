@@ -58,6 +58,9 @@ type Config struct {
 	SSHListenAddr string
 	// SSHHostKeyFile holds the host key of that service. It is created when missing.
 	SSHHostKeyFile string
+	// SSHPublicAddr is how clients reach that service ("host:port"), when it is not the
+	// host of APP_URL and the listening port: a tunnel or a port forward in between.
+	SSHPublicAddr string
 	// SessionMaxAge is the absolute lifetime of a session, in minutes.
 	SessionMaxAge int
 
@@ -331,6 +334,7 @@ func Load(basePath string) *Config {
 	c.AllowedClientIPs = nullToEmpty(get("ALLOWED_CLIENT_IPS", ""))
 	c.SSHListenAddr = strings.TrimSpace(nullToEmpty(get("SSH_LISTEN_ADDR", "")))
 	c.SSHHostKeyFile = strings.TrimSpace(nullToEmpty(get("SSH_HOST_KEY_FILE", "")))
+	c.SSHPublicAddr = strings.TrimSpace(nullToEmpty(get("SSH_PUBLIC_ADDR", "")))
 	c.ListenAddr = ":8000"
 	for _, key := range []string{"LISTEN_ADDR", "SERVER_PORT", "PORT"} {
 		if v := strings.TrimSpace(get(key, "")); v != "" {

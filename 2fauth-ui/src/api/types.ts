@@ -128,6 +128,8 @@ export interface SshKey {
 export interface SshKeysResponse {
   enabled: boolean
   port?: string
+  /** how clients reach the service: SSH_PUBLIC_ADDR, or the host of the panel */
+  host?: string
   host_fingerprint?: string
   keys: SshKey[]
 }

@@ -16,6 +16,9 @@ func (s *Server) registerRoutes() {
 	s.add(http.MethodGet, "refresh-csrf", s.refreshCSRF)
 	s.add(http.MethodGet, "manifest.json", s.manifestJSON)
 	s.add(http.MethodGet, "up", s.healthPage)
+	// How an agent or a script gets a code: public, it carries no credential.
+	s.add(http.MethodGet, "agents.md", s.agentGuide)
+	s.add(http.MethodGet, "llms.txt", s.agentGuide)
 
 	// --- socialite ----------------------------------------------------------
 	// Only the OpenID Connect driver is implemented; any other driver answers

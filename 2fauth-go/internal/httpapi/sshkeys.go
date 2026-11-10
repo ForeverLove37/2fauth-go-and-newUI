@@ -3,7 +3,6 @@ package httpapi
 import (
 	"crypto/rsa"
 	"errors"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -93,9 +92,9 @@ func (s *Server) listSSHKeys(c *ctx) {
 	}
 	payload := map[string]any{"enabled": s.cfg.SSHListenAddr != "", "keys": out}
 	if s.cfg.SSHListenAddr != "" {
-		if _, port, err := net.SplitHostPort(s.cfg.SSHListenAddr); err == nil {
-			payload["port"] = port
-		}
+		host, port := s.sshPublicAddr(s.publicBaseURL(c))
+		payload["port"] = port
+		payload["host"] = host
 		s.sshMu.RLock()
 		payload["host_fingerprint"] = s.sshHostFingerprint
 		s.sshMu.RUnlock()

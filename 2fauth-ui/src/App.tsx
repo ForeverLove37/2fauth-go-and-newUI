@@ -11,6 +11,7 @@ import { useThemeStore } from './theme/store'
 
 const Dashboard = lazy(() => import('./views/Dashboard'))
 const Settings = lazy(() => import('./views/Settings'))
+const Agents = lazy(() => import('./views/Agents'))
 
 function Booting() {
   const t = useT()
@@ -98,6 +99,15 @@ export default function App() {
       <Route path="/register" element={user ? <Navigate to="/" replace /> : <Register />} />
       <Route path="/password/lost" element={<PasswordLost />} />
       <Route path="/password/reset" element={<PasswordReset />} />
+      {/* Public: an agent's user reads it before granting anything. */}
+      <Route
+        path="/agents"
+        element={
+          <Suspense fallback={<Booting />}>
+            <Agents />
+          </Suspense>
+        }
+      />
       <Route
         element={
           <Protected>

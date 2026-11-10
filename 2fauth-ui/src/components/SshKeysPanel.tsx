@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../api/client'
 import type { ApiError, SshKey, SshKeysResponse } from '../api/types'
 import { useT } from '../i18n'
@@ -34,9 +35,9 @@ export default function SshKeysPanel() {
 
   const usage = useMemo(() => {
     const port = info?.port && info.port !== '22' ? `-p ${info.port} ` : ''
-    const target = `otp@${window.location.hostname}`
+    const target = `otp@${info?.host || window.location.hostname}`
     return [`ssh ${port}${target} list`, `ssh ${port}${target} get github`, `ssh ${port}${target} get github --json`].join('\n')
-  }, [info?.port])
+  }, [info?.port, info?.host])
 
   function toggle(list: number[], id: number) {
     return list.includes(id) ? list.filter((item) => item !== id) : [...list, id]
@@ -258,6 +259,9 @@ export default function SshKeysPanel() {
           <div className="ssh-usage" style={{ marginTop: 6 }}>
             {usage}
           </div>
+          <p className="hint small" style={{ marginTop: 8 }}>
+            <Link to="/agents">{t('Guide for AI agents and scripts')} →</Link>
+          </p>
           {info.host_fingerprint && (
             <p className="hint small" style={{ marginTop: 8 }}>
               {t('Host key fingerprint, to compare on the first connection:')} <span className="mono">{info.host_fingerprint}</span>
