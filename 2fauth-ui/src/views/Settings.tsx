@@ -9,6 +9,7 @@ import ThemeEditor from './ThemeEditor'
 import IconProvidersPanel from '../components/IconProvidersPanel'
 import SsoSettingsPanel from '../components/SsoSettingsPanel'
 import MailSettingsPanel from '../components/MailSettingsPanel'
+import AndroidReleasesPanel from '../components/AndroidReleasesPanel'
 import SshKeysPanel from '../components/SshKeysPanel'
 import { useI18nStore, useT } from '../i18n'
 import { useLoaded } from '../lib/hooks'
@@ -23,6 +24,7 @@ const tabLabels: Record<SettingsTab, string> = {
   admin: 'General',
   sso: 'Single sign-on',
   mail: 'E-mail',
+  android: 'Android app',
 }
 
 /** Locales that actually ship a catalogue; anything else falls back to English. */
@@ -62,6 +64,7 @@ export default function Settings() {
         {tab === 'security' && <SecurityTab />}
         {tab === 'sso' && <SsoSettingsPanel />}
         {tab === 'mail' && <MailSettingsPanel />}
+        {tab === 'android' && <AndroidReleasesPanel />}
         {tab === 'admin' && <AdminTab />}
       </div>
     </div>

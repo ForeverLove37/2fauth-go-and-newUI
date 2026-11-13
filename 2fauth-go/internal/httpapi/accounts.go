@@ -54,6 +54,13 @@ func (s *Server) accountReadPayload(c *ctx, a *store.Account, withOtp bool, at i
 	for k, v := range s.accountStorePayload(a, owned || c.user == nil, owned) {
 		payload[k] = v
 	}
+	if owned {
+		payload["phone_sync"] = a.PhoneSync
+	}
+	// A phone never reads the secret of an account that stays in the cloud.
+	if c.device && !a.PhoneSync {
+		delete(payload, "secret")
+	}
 
 	if withOtp && a.OTPType != otp.TypeHOTP {
 		if otpPayload, err := s.generateTOTPPayload(a, at); err == nil {
@@ -263,6 +270,11 @@ func (s *Server) storeAccount(c *ctx) {
 		jsonMessage(c.w, http.StatusInternalServerError, "server error")
 		return
 	}
+	if sync, ok := v.boolean("phone_sync"); ok && sync {
+		if err := s.st.SetPhoneSync(created.ID, true); err == nil {
+			created.PhoneSync = true
+		}
+	}
 
 	if groupID := v.optional("group_id"); groupID != "" {
 		if gid, err := strconv.ParseInt(groupID, 10, 64); err == nil && gid > 0 {
@@ -280,6 +292,11 @@ func (s *Server) storeAccount(c *ctx) {
 func (s *Server) updateAccount(c *ctx) {
 	a, ok := s.lookupAccount(c, true)
 	if !ok {
+		return
+	}
+	// A phone edits only its own copies: the others' secrets it does not have.
+	if c.device && !a.PhoneSync {
+		jsonMessage(c.w, http.StatusForbidden, "This account is not synced to phones")
 		return
 	}
 
@@ -303,6 +320,9 @@ func (s *Server) updateAccount(c *ctx) {
 	// An icon removed on purpose must not come back on its own.
 	if v.has("icon") {
 		_ = s.st.SetIconOptOut(a.ID, updated.Icon == "")
+	}
+	if sync, ok := v.boolean("phone_sync"); ok && sync != a.PhoneSync {
+		_ = s.st.SetPhoneSync(a.ID, sync)
 	}
 	s.wakeIconFiller()
 
@@ -1098,3 +1118,34 @@ func (s *Server) logOtpFor(user *store.User, ip string, a *store.Account, otpTyp
 
 var _ = fmt.Sprintf
 var _ = json.Marshal
+
+// setPhoneSync handles PATCH /api/v1/twofaccounts/{twofaccount}/phone-sync. The web
+// panel may let phones keep a copy of the secret; a phone may only give its copy up.
+func (s *Server) setPhoneSync(c *ctx) {
+	a, ok := s.lookupAccount(c, true)
+	if !ok {
+		return
+	}
+	v := newValidator(c)
+	sync, present := v.boolean("phone_sync")
+	if !present {
+		v.fail("phone_sync", "The phone sync field is required.")
+	}
+	if v.respond() {
+		return
+	}
+	if c.device && sync && !a.PhoneSync {
+		jsonMessage(c.w, http.StatusForbidden, "Only the web panel can sync an account to phones")
+		return
+	}
+	if err := s.st.SetPhoneSync(a.ID, sync); err != nil {
+		s.srvError(c, err)
+		return
+	}
+	refreshed, err := s.st.GetAccount(a.ID)
+	if err != nil {
+		s.srvError(c, err)
+		return
+	}
+	jsonData(c.w, http.StatusOK, s.accountReadPayload(c, refreshed, false, 0))
+}

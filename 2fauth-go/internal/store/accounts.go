@@ -27,6 +27,9 @@ type Account struct {
 	Counter   *int64
 	CreatedAt *time.Time
 	UpdatedAt *time.Time
+	// PhoneSync lets the phone app keep a copy of the secret. Without it the phones
+	// only ever receive codes.
+	PhoneSync bool
 
 	// ImportIcon carries a base64 icon read from an import file; it is not a column.
 	ImportIcon string
@@ -35,7 +38,7 @@ type Account struct {
 // HOTP reports whether the account uses counter based OTP.
 func (a *Account) HOTP() bool { return a.OTPType == "hotp" }
 
-const accountColumns = `id, user_id, group_id, service, legacy_uri, account, icon, otp_type, secret, algorithm, digits, period, counter, created_at, updated_at`
+const accountColumns = `id, user_id, group_id, service, legacy_uri, account, icon, otp_type, secret, algorithm, digits, period, counter, created_at, updated_at, phone_sync`
 
 func (s *Store) scanAccount(scan func(...any) error) (*Account, error) {
 	var (
@@ -54,9 +57,10 @@ func (s *Store) scanAccount(scan func(...any) error) (*Account, error) {
 		counter db.NullInt
 		created db.NullString
 		updated db.NullString
+		phone   any
 	)
 	if err := scan(&a.ID, &userID, &groupID, &service, &legacy, &account, &icon, &otpType,
-		&secret, &alg, &digits, &period, &counter, &created, &updated); err != nil {
+		&secret, &alg, &digits, &period, &counter, &created, &updated, &phone); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -73,6 +77,7 @@ func (s *Store) scanAccount(scan func(...any) error) (*Account, error) {
 	a.Icon = icon.String
 	a.OTPType = otpType.String
 	a.Secret = s.openSecret(a.ID, secret.String)
+	a.PhoneSync = db.IntToBool(phone)
 	a.Algorithm = alg.String
 	a.Digits = int(digits.Int)
 	if period.Valid {
@@ -275,6 +280,12 @@ func (s *Store) AccountsMissingIcon() ([]MissingIcon, error) {
 // SetMissingIcon gives an account an icon, unless it got one in the meantime.
 func (s *Store) SetMissingIcon(id int64, icon string) error {
 	_, err := s.DB.Exec(`UPDATE twofaccounts SET icon = ? WHERE id = ? AND (icon IS NULL OR icon = '')`, icon, id)
+	return err
+}
+
+// SetPhoneSync records whether the phone app may keep a copy of the secret.
+func (s *Store) SetPhoneSync(id int64, sync bool) error {
+	_, err := s.DB.Exec(`UPDATE twofaccounts SET phone_sync = ?, updated_at = ? WHERE id = ?`, sync, s.DB.Now(), id)
 	return err
 }
 

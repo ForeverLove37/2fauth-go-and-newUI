@@ -122,3 +122,18 @@ object CodeClipboard {
 
     private const val LABEL = "2FAuth"
 }
+
+/** The same hue per service as the web panel, so that a service has one colour everywhere. */
+fun identityHueOf(service: String?, account: String?, id: Any): Float {
+    val source = (service?.takeIf { it.isNotEmpty() } ?: account?.takeIf { it.isNotEmpty() } ?: id.toString()).lowercase()
+    var hash = 0L
+    for (char in source) hash = (hash * 31 + char.code) and 0xFFFFFFFFL
+    return Math.round((hash * 0.61803398875 * 360) % 360).toFloat()
+}
+
+fun initialsOf(service: String?, account: String?): String {
+    val source = service?.takeIf { it.isNotBlank() } ?: account?.takeIf { it.isNotBlank() } ?: "?"
+    val words = source.replace(Regex("[^\\p{L}\\p{N}\\s]"), " ").trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    if (words.size >= 2) return (words[0].take(1) + words[1].take(1)).uppercase()
+    return source.take(2).uppercase()
+}

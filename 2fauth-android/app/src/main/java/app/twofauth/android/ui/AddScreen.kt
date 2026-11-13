@@ -2,9 +2,6 @@ package app.twofauth.android.ui
 
 import android.content.ClipboardManager
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -32,18 +29,13 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -63,184 +55,218 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.FileProvider
 import app.twofauth.android.AppModel
 import app.twofauth.android.R
-import app.twofauth.android.data.Account
-import app.twofauth.android.data.Group
-import app.twofauth.android.data.label
-import java.io.ByteArrayOutputStream
-import java.io.File
+import app.twofauth.android.UiState
+import app.twofauth.android.data.Kind
+import app.twofauth.android.data.OtpAuth
+import app.twofauth.android.data.OtpEngine
+import app.twofauth.android.data.ParsedAccount
+import app.twofauth.android.data.QrDecoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
-private enum class AddMode { Choose, Link, Manual }
+private enum class AddMode { Choose, Scan, Link, Manual }
 
-/** What was read from a QR code or a link, waiting for the user to confirm it. */
-private sealed interface Found {
-    data class Single(val uri: String, val account: Account) : Found
-    data class Export(val payload: String) : Found
-}
+/** Where the new codes go: the three kinds. */
+private enum class Target { Phone, Synced, Cloud }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddScreen(model: AppModel, groups: List<Group>, initialUri: String?, onDone: () -> Unit) {
+fun AddScreen(model: AppModel, state: UiState, initialUri: String?, onDone: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val authenticator = LocalAuthenticator.current
     var mode by rememberSaveable { mutableStateOf(if (initialUri != null) AddMode.Link else AddMode.Choose) }
     var busy by remember { mutableStateOf(false) }
-    var found by remember { mutableStateOf<Found?>(null) }
+    var found by remember { mutableStateOf<List<ParsedAccount>?>(null) }
+    var foreign by remember { mutableStateOf<String?>(null) }
     var link by rememberSaveable { mutableStateOf(initialUri.orEmpty()) }
-    var groupId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val signedIn = state.user != null
+    val verifyTitle = stringResource(R.string.verify_sync)
 
-    BackHandler { if (mode == AddMode.Choose || initialUri != null) onDone() else mode = AddMode.Choose }
+    fun back() {
+        if (mode == AddMode.Choose || initialUri != null) onDone() else mode = AddMode.Choose
+    }
+    BackHandler(enabled = mode != AddMode.Scan) { back() }
 
     fun inspect(text: String) {
         val value = text.trim()
         if (value.isEmpty()) return
-        scope.launch {
-            busy = true
-            found = if (value.startsWith("otpauth://totp", true) || value.startsWith("otpauth://hotp", true)) {
-                model.preview(value)?.let { Found.Single(value, it) }
-            } else {
-                Found.Export(value)
-            }
-            busy = false
+        try {
+            found = OtpAuth.parse(value)
+        } catch (_: OtpAuth.FormatException) {
+            // Aegis, 2FAS, Bitwarden… exports: only the server reads them, as cloud codes.
+            if (signedIn) foreign = value else model.say(context.getString(R.string.not_otpauth))
         }
     }
 
-    fun scan(uri: Uri?) {
-        if (uri == null) return
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             busy = true
-            val jpeg = withContext(Dispatchers.IO) { shrink(context, uri) }
-            val text = jpeg?.let { model.decodeQr(it) }
+            val text = withContext(Dispatchers.Default) { QrDecoder.fromUri(context, uri) }
             busy = false
-            if (text != null) inspect(text) else if (jpeg == null) model.say(context.getString(R.string.image_unreadable))
+            if (text != null) inspect(text) else model.say(context.getString(R.string.no_qr_found))
         }
     }
-
-    val photo = remember { File(File(context.cacheDir, "scans").apply { mkdirs() }, "scan.jpg") }
-    val photoUri = remember { FileProvider.getUriForFile(context, "${context.packageName}.files", photo) }
-    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
-        if (taken) scan(photoUri)
-    }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { scan(it) }
 
     LaunchedEffect(initialUri) { if (initialUri != null) inspect(initialUri) }
 
-    Backdrop {
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
-            Row(Modifier.padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { if (mode == AddMode.Choose || initialUri != null) onDone() else mode = AddMode.Choose }) {
-                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, stringResource(R.string.back))
+    if (mode == AddMode.Scan) {
+        ScannerScreen(
+            onResult = { text ->
+                mode = AddMode.Choose
+                inspect(text)
+            },
+            onBack = { mode = AddMode.Choose },
+        )
+    } else {
+        Backdrop {
+            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+                Row(Modifier.padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = ::back) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, stringResource(R.string.back)) }
+                    Text(stringResource(R.string.add_account), fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                    Spacer(Modifier.weight(1f))
+                    if (busy) CircularProgressIndicator(Modifier.size(22.dp).padding(end = 4.dp), strokeWidth = 2.dp, color = Palette.accent)
+                    Spacer(Modifier.width(16.dp))
                 }
-                Text(stringResource(R.string.add_account), fontWeight = FontWeight.Bold, fontSize = 19.sp)
-                Spacer(Modifier.weight(1f))
-                if (busy) CircularProgressIndicator(Modifier.size(22.dp).padding(end = 4.dp), strokeWidth = 2.dp, color = Palette.accent)
-                Spacer(Modifier.width(16.dp))
-            }
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-                when (mode) {
-                    AddMode.Choose -> {
-                        ChoiceCard(Icons.Outlined.PhotoCamera, stringResource(R.string.scan_qr), stringResource(R.string.scan_qr_hint)) {
-                            camera.launch(photoUri)
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+                    when (mode) {
+                        AddMode.Choose, AddMode.Scan -> {
+                            ChoiceCard(Icons.Outlined.QrCodeScanner, stringResource(R.string.scan_qr), stringResource(R.string.scan_qr_hint_local)) { mode = AddMode.Scan }
+                            ChoiceCard(Icons.Outlined.Image, stringResource(R.string.from_image), stringResource(R.string.from_image_hint)) {
+                                picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }
+                            ChoiceCard(Icons.Outlined.ContentPaste, stringResource(R.string.paste_link), stringResource(R.string.paste_link_hint)) {
+                                if (link.isEmpty()) link = clipboardText(context).orEmpty().takeIf { it.startsWith("otpauth", true) }.orEmpty()
+                                mode = AddMode.Link
+                            }
+                            ChoiceCard(Icons.Outlined.Edit, stringResource(R.string.manual), stringResource(R.string.manual_hint)) { mode = AddMode.Manual }
+                            Text(
+                                stringResource(R.string.add_privacy),
+                                color = Palette.muted, fontSize = 12.sp,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 14.dp),
+                            )
                         }
-                        ChoiceCard(Icons.Outlined.Image, stringResource(R.string.from_image), stringResource(R.string.from_image_hint)) {
-                            picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        AddMode.Link -> {
+                            OutlinedTextField(
+                                value = link,
+                                onValueChange = { link = it },
+                                label = { Text(stringResource(R.string.link_label)) },
+                                placeholder = { Text("otpauth://totp/…") },
+                                minLines = 3,
+                                colors = fieldColors(),
+                                shape = RoundedCornerShape(14.dp),
+                                textStyle = TextStyle(fontFamily = Mono, fontSize = 13.sp),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(stringResource(R.string.link_help), color = Palette.muted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp))
+                            Button(onClick = { inspect(link) }, enabled = link.isNotBlank(), colors = primaryButton(), modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                                Text(stringResource(R.string.continue_action))
+                            }
                         }
-                        ChoiceCard(Icons.Outlined.ContentPaste, stringResource(R.string.paste_link), stringResource(R.string.paste_link_hint)) {
-                            if (link.isEmpty()) link = clipboardText(context).orEmpty().takeIf { it.startsWith("otpauth", true) }.orEmpty()
-                            mode = AddMode.Link
-                        }
-                        ChoiceCard(Icons.Outlined.Edit, stringResource(R.string.manual), stringResource(R.string.manual_hint)) {
-                            mode = AddMode.Manual
-                        }
+                        AddMode.Manual -> ManualForm { found = listOf(it) }
                     }
-                    AddMode.Link -> {
-                        OutlinedTextField(
-                            value = link,
-                            onValueChange = { link = it },
-                            label = { Text(stringResource(R.string.link_label)) },
-                            placeholder = { Text("otpauth://totp/…") },
-                            minLines = 3,
-                            colors = fieldColors(),
-                            shape = RoundedCornerShape(14.dp),
-                            textStyle = androidx.compose.ui.text.TextStyle(fontFamily = Mono, fontSize = 13.sp),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Text(stringResource(R.string.link_help), color = Palette.muted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp))
-                        Button(
-                            onClick = { inspect(link) },
-                            enabled = !busy && link.isNotBlank(),
-                            colors = primaryButton(),
-                            modifier = Modifier.fillMaxWidth().height(50.dp),
-                        ) { Text(stringResource(R.string.continue_action)) }
-                    }
-                    AddMode.Manual -> ManualForm(model, groups, busy, onBusy = { busy = it }, onDone = onDone)
+                    Spacer(Modifier.height(24.dp))
                 }
-                Spacer(Modifier.height(24.dp))
             }
         }
     }
 
-    when (val item = found) {
-        is Found.Single -> AlertDialog(
+    found?.let { list ->
+        var target by remember {
+            mutableStateOf(if (model.settings.defaultKind == Kind.SYNCED && signedIn) Target.Synced else Target.Phone)
+        }
+        val existing = list.count { model.store.hasSecret(it.secret) }
+        AlertDialog(
             onDismissRequest = { found = null },
-            title = { Text(item.account.label()) },
+            title = { Text(if (list.size == 1) list[0].service.ifBlank { list[0].account } else stringResource(R.string.import_count, list.size)) },
             text = {
                 Column {
-                    Text(item.account.account.orEmpty(), color = Palette.muted)
+                    list.take(6).forEach {
+                        Text(
+                            "${it.service.ifBlank { "—" }} · ${it.account}",
+                            fontSize = 13.sp, color = Palette.muted,
+                        )
+                    }
+                    if (list.size > 6) Text("…", color = Palette.muted)
+                    if (existing > 0) Text(stringResource(R.string.already_here, existing), color = Palette.warn, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                    Spacer(Modifier.height(14.dp))
+                    Text(stringResource(R.string.save_as), fontSize = 12.sp, color = Palette.muted)
+                    Spacer(Modifier.height(6.dp))
+                    val options = buildList {
+                        add(Target.Phone to stringResource(R.string.kind_local))
+                        if (signedIn) {
+                            add(Target.Synced to stringResource(R.string.kind_synced))
+                            add(Target.Cloud to stringResource(R.string.kind_cloud))
+                        }
+                    }
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        options.forEachIndexed { index, (value, text) ->
+                            SegmentedButton(
+                                selected = target == value,
+                                onClick = { target = value },
+                                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                                colors = segmentColors(),
+                            ) { Text(text, fontSize = 12.sp, maxLines = 1) }
+                        }
+                    }
                     Text(
-                        "${item.account.otpType.uppercase()} · ${item.account.digits} · ${item.account.algorithm.uppercase()}" +
-                            (item.account.period?.let { " · ${it}s" } ?: ""),
-                        fontFamily = Mono,
-                        fontSize = 12.sp,
-                        color = Palette.muted,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                        stringResource(
+                            when (target) {
+                                Target.Phone -> R.string.kind_local_hint
+                                Target.Synced -> R.string.kind_synced_hint
+                                Target.Cloud -> R.string.kind_cloud_hint
+                            },
+                        ),
+                        fontSize = 12.sp, color = Palette.muted, modifier = Modifier.padding(top = 8.dp),
                     )
-                    if (groups.isNotEmpty()) GroupPicker(groups, groupId) { groupId = it }
                 }
             },
             confirmButton = {
                 TextButton(enabled = !busy, onClick = {
                     scope.launch {
+                        if (target == Target.Synced && !(model.canVerifyUser() && authenticator.verify(verifyTitle))) {
+                            if (!model.canVerifyUser()) model.say(context.getString(R.string.need_screen_lock))
+                            return@launch
+                        }
                         busy = true
-                        val created = model.create(buildJsonObject {
-                            put("uri", item.uri)
-                            groupId?.let { put("group_id", it) }
-                        })
+                        val added = when (target) {
+                            Target.Phone -> model.addParsed(list, Kind.LOCAL)
+                            Target.Synced -> model.addParsed(list, Kind.SYNCED)
+                            Target.Cloud -> model.addToCloud(list)
+                        }
                         busy = false
                         found = null
-                        if (created != null) {
-                            model.say(context.getString(R.string.added, created.label()))
-                            onDone()
-                        }
+                        model.say(context.getString(R.string.added_count, added))
+                        if (added > 0) onDone()
                     }
                 }) { Text(stringResource(R.string.add)) }
             },
             dismissButton = { TextButton(onClick = { found = null }) { Text(stringResource(R.string.cancel)) } },
-            containerColor = Palette.panelStrong,
+            containerColor = Palette.sheet,
         )
-        is Found.Export -> AlertDialog(
-            onDismissRequest = { found = null },
+    }
+
+    foreign?.let { payload ->
+        AlertDialog(
+            onDismissRequest = { foreign = null },
             title = { Text(stringResource(R.string.import_title)) },
-            text = { Text(stringResource(R.string.import_text)) },
+            text = { Text(stringResource(R.string.import_foreign)) },
             confirmButton = {
                 TextButton(enabled = !busy, onClick = {
                     scope.launch {
                         busy = true
-                        val result = model.import(item.payload)
+                        val result = model.importToServer(payload)
                         busy = false
-                        found = null
+                        foreign = null
                         if (result != null) {
                             model.say(context.getString(R.string.import_result, result.imported, result.duplicates, result.invalid))
                             if (result.imported > 0) onDone()
@@ -248,18 +274,24 @@ fun AddScreen(model: AppModel, groups: List<Group>, initialUri: String?, onDone:
                     }
                 }) { Text(stringResource(R.string.import_action)) }
             },
-            dismissButton = { TextButton(onClick = { found = null }) { Text(stringResource(R.string.cancel)) } },
-            containerColor = Palette.panelStrong,
+            dismissButton = { TextButton(onClick = { foreign = null }) { Text(stringResource(R.string.cancel)) } },
+            containerColor = Palette.sheet,
         )
-        null -> Unit
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ManualForm(model: AppModel, groups: List<Group>, busy: Boolean, onBusy: (Boolean) -> Unit, onDone: () -> Unit) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+fun segmentColors() = SegmentedButtonDefaults.colors(
+    activeContainerColor = Palette.accent.copy(alpha = 0.18f),
+    activeContentColor = Palette.accent,
+    inactiveContainerColor = Palette.panel,
+    inactiveContentColor = Palette.muted,
+    activeBorderColor = Palette.accent.copy(alpha = 0.5f),
+    inactiveBorderColor = Palette.border,
+)
+
+@Composable
+private fun ManualForm(onReady: (ParsedAccount) -> Unit) {
     var service by rememberSaveable { mutableStateOf("") }
     var account by rememberSaveable { mutableStateOf("") }
     var secret by rememberSaveable { mutableStateOf("") }
@@ -268,110 +300,55 @@ private fun ManualForm(model: AppModel, groups: List<Group>, busy: Boolean, onBu
     var period by rememberSaveable { mutableStateOf("30") }
     var counter by rememberSaveable { mutableStateOf("0") }
     var algorithm by rememberSaveable { mutableStateOf("sha1") }
-    var groupId by rememberSaveable { mutableStateOf<Long?>(null) }
     var advanced by rememberSaveable { mutableStateOf(false) }
+    val validSecret = secret.isEmpty() || OtpEngine.isValidSecret(secret)
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
             listOf("totp" to "TOTP", "hotp" to "HOTP", "steamtotp" to "Steam").forEachIndexed { index, (value, text) ->
-                SegmentedButton(
-                    selected = type == value,
-                    onClick = { type = value },
-                    shape = SegmentedButtonDefaults.itemShape(index, 3),
-                    colors = SegmentedButtonDefaults.colors(
-                        activeContainerColor = Palette.accent.copy(alpha = 0.18f),
-                        activeContentColor = Palette.accent,
-                        inactiveContainerColor = Palette.panel,
-                        inactiveContentColor = Palette.muted,
-                        activeBorderColor = Palette.accent.copy(alpha = 0.5f),
-                        inactiveBorderColor = Palette.border,
-                    ),
-                ) { Text(text) }
+                SegmentedButton(selected = type == value, onClick = { type = value }, shape = SegmentedButtonDefaults.itemShape(index, 3), colors = segmentColors()) { Text(text) }
             }
         }
         Field(service, { service = it }, stringResource(R.string.service), capitalize = true)
         Field(account, { account = it }, stringResource(R.string.account_name))
         Field(secret, { secret = it.uppercase().replace(" ", "") }, stringResource(R.string.secret), mono = true)
-        if (groups.isNotEmpty()) GroupPicker(groups, groupId) { groupId = it }
-
+        if (!validSecret) Text(stringResource(R.string.secret_invalid), color = Palette.danger, fontSize = 12.sp)
         Text(
             stringResource(if (advanced) R.string.hide_advanced else R.string.show_advanced),
-            color = Palette.accent2,
-            fontSize = 13.sp,
+            color = Palette.accent2, fontSize = 13.sp,
             modifier = Modifier.clickable { advanced = !advanced }.padding(vertical = 4.dp),
         )
         if (advanced && type != "steamtotp") {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Field(digits, { digits = it.filter(Char::isDigit) }, stringResource(R.string.digits), number = true, modifier = Modifier.weight(1f))
-                if (type == "totp") {
-                    Field(period, { period = it.filter(Char::isDigit) }, stringResource(R.string.period), number = true, modifier = Modifier.weight(1f))
-                } else {
-                    Field(counter, { counter = it.filter(Char::isDigit) }, stringResource(R.string.counter), number = true, modifier = Modifier.weight(1f))
-                }
+                if (type == "totp") Field(period, { period = it.filter(Char::isDigit) }, stringResource(R.string.period), number = true, modifier = Modifier.weight(1f))
+                else Field(counter, { counter = it.filter(Char::isDigit) }, stringResource(R.string.counter), number = true, modifier = Modifier.weight(1f))
             }
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 listOf("sha1", "sha256", "sha512", "md5").forEachIndexed { index, value ->
-                    SegmentedButton(
-                        selected = algorithm == value,
-                        onClick = { algorithm = value },
-                        shape = SegmentedButtonDefaults.itemShape(index, 4),
-                    ) { Text(value.uppercase(), fontSize = 12.sp) }
-                }
-            }
-        }
-
-        Button(
-            onClick = {
-                scope.launch {
-                    onBusy(true)
-                    val created = model.create(buildJsonObject {
-                        put("otp_type", type)
-                        put("service", service.trim())
-                        put("account", account.trim())
-                        put("secret", secret.trim())
-                        if (type != "steamtotp") {
-                            put("algorithm", algorithm)
-                            digits.toIntOrNull()?.let { put("digits", it) }
-                            if (type == "totp") period.toIntOrNull()?.let { put("period", it) } else counter.toLongOrNull()?.let { put("counter", it) }
-                        }
-                        groupId?.let { put("group_id", it) }
-                    })
-                    onBusy(false)
-                    if (created != null) {
-                        model.say(context.getString(R.string.added, created.label()))
-                        onDone()
+                    SegmentedButton(selected = algorithm == value, onClick = { algorithm = value }, shape = SegmentedButtonDefaults.itemShape(index, 4), colors = segmentColors()) {
+                        Text(value.uppercase(), fontSize = 12.sp)
                     }
                 }
-            },
-            enabled = !busy && account.isNotBlank() && secret.isNotBlank(),
-            colors = primaryButton(),
-            modifier = Modifier.fillMaxWidth().height(50.dp),
-        ) { Text(stringResource(R.string.add)) }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun GroupPicker(groups: List<Group>, selected: Long?, onSelect: (Long?) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    val none = stringResource(R.string.no_group)
-    ExposedDropdownMenuBox(expanded = open, onExpandedChange = { open = it }) {
-        OutlinedTextField(
-            value = groups.firstOrNull { it.id == selected }?.name ?: none,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(stringResource(R.string.group)) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(open) },
-            colors = fieldColors(),
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
-        )
-        ExposedDropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.panelStrong) {
-            DropdownMenuItem(text = { Text(none) }, onClick = { onSelect(null); open = false })
-            groups.forEach { group ->
-                DropdownMenuItem(text = { Text(group.name) }, onClick = { onSelect(group.id); open = false })
             }
         }
+        Button(
+            onClick = {
+                val steam = type == "steamtotp"
+                onReady(
+                    ParsedAccount(
+                        service = service.trim(), account = account.trim(), secret = secret.trim(), otpType = type,
+                        digits = if (steam) 5 else digits.toIntOrNull()?.coerceIn(5, 10) ?: 6,
+                        algorithm = if (steam) "sha1" else algorithm,
+                        period = if (steam) 30 else period.toIntOrNull()?.takeIf { it > 0 } ?: 30,
+                        counter = counter.toLongOrNull() ?: 0,
+                    ),
+                )
+            },
+            enabled = (account.isNotBlank() || service.isNotBlank()) && secret.isNotBlank() && validSecret,
+            colors = primaryButton(),
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+        ) { Text(stringResource(R.string.continue_action)) }
     }
 }
 
@@ -392,7 +369,7 @@ fun Field(
         singleLine = true,
         colors = fieldColors(),
         shape = RoundedCornerShape(14.dp),
-        textStyle = if (mono) androidx.compose.ui.text.TextStyle(fontFamily = Mono) else androidx.compose.ui.text.TextStyle.Default,
+        textStyle = if (mono) TextStyle(fontFamily = Mono) else TextStyle.Default,
         keyboardOptions = KeyboardOptions(
             keyboardType = if (number) KeyboardType.Number else if (mono) KeyboardType.Ascii else KeyboardType.Text,
             capitalization = if (mono) KeyboardCapitalization.Characters else if (capitalize) KeyboardCapitalization.Words else KeyboardCapitalization.None,
@@ -428,22 +405,3 @@ fun primaryButton() = ButtonDefaults.buttonColors(
 private fun clipboardText(context: Context): String? = runCatching {
     context.getSystemService(ClipboardManager::class.java)?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.trim()
 }.getOrNull()
-
-/** A camera photo is several megabytes: a QR code reads as well from 1600 pixels. */
-private fun shrink(context: Context, uri: Uri): ByteArray? = runCatching {
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-    var sample = 1
-    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1600) sample *= 2
-    val bitmap = context.contentResolver.openInputStream(uri)?.use {
-        BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
-    } ?: return null
-    ByteArrayOutputStream().use { out ->
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
-        bitmap.recycle()
-        out.toByteArray()
-    }
-}.getOrNull().also {
-    // The photo of a secret does not stay on the phone.
-    if (uri.authority == "${context.packageName}.files") runCatching { context.contentResolver.delete(uri, null, null) }
-}

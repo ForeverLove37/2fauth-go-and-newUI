@@ -113,8 +113,10 @@ func New(opts Options) (*Server, error) {
 
 // route is one entry of the routing table.
 type route struct {
-	method  string
-	segs    []string
+	method string
+	segs   []string
+	// key is "METHOD pattern", what the allow-list of device tokens names.
+	key     string
 	auth    bool // a signed-in user is required
 	admin   bool // an administrator is required
 	static  bool // cacheable asset: no session is read and no cookie is written
@@ -132,6 +134,9 @@ type ctx struct {
 	// viaToken is set when the request is authenticated by a personal access token,
 	// which a browser never attaches on its own: CSRF does not apply.
 	viaToken bool
+	// device is set when that token is the token of a phone app (DeviceScope).
+	device  bool
+	tokenID string
 
 	params   map[string]string
 	body     map[string]any
@@ -144,23 +149,24 @@ func (s *Server) add(method, pattern string, h func(*ctx)) {
 	s.routes = append(s.routes, route{
 		method:  method,
 		segs:    splitPattern(pattern),
+		key:     method + " " + pattern,
 		handler: h,
 	})
 }
 
 // addAuth registers an authenticated route.
 func (s *Server) addAuth(method, pattern string, h func(*ctx)) {
-	s.routes = append(s.routes, route{method: method, segs: splitPattern(pattern), auth: true, handler: h})
+	s.routes = append(s.routes, route{method: method, segs: splitPattern(pattern), key: method + " " + pattern, auth: true, handler: h})
 }
 
 // addAdmin registers an administrator-only route.
 func (s *Server) addAdmin(method, pattern string, h func(*ctx)) {
-	s.routes = append(s.routes, route{method: method, segs: splitPattern(pattern), auth: true, admin: true, handler: h})
+	s.routes = append(s.routes, route{method: method, segs: splitPattern(pattern), key: method + " " + pattern, auth: true, admin: true, handler: h})
 }
 
 // addStatic registers a public asset route.
 func (s *Server) addStatic(method, pattern string, h func(*ctx)) {
-	s.routes = append(s.routes, route{method: method, segs: splitPattern(pattern), static: true, handler: h})
+	s.routes = append(s.routes, route{method: method, segs: splitPattern(pattern), key: method + " " + pattern, static: true, handler: h})
 }
 
 // limitBody sets the largest request body of the last registered route.
@@ -279,6 +285,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The token of a phone app reaches only what a phone needs (see devices.go).
+	if c.device && !deviceRoutes[rt.key] {
+		jsonMessage(bw, http.StatusForbidden, "This endpoint is not available to the token of a device")
+		s.finish(w, bw, c.session)
+		return
+	}
+
 	if isUnsafeMethod(r.Method) && !c.viaToken && !s.csrfValid(r, c.session) {
 		jsonResponse(bw, statusCSRFMismatch, map[string]any{
 			"message": "CSRF token mismatch.",
@@ -321,9 +334,11 @@ func (s *Server) resolveUser(c *ctx) bool {
 	}
 	if c.user == nil {
 		if tok := bearerToken(c.r); tok != "" && s.patPolicyAllows() {
-			if u := s.userFromToken(tok); u != nil {
+			if token, u, err := s.st.TokenFromPlain(tok); err == nil {
 				c.user = u
 				c.viaToken = true
+				c.tokenID = token.ID
+				c.device = token.HasScope(store.DeviceScope)
 			}
 		}
 	}
@@ -544,15 +559,6 @@ func bearerToken(r *http.Request) string {
 		return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
 	}
 	return ""
-}
-
-// userFromToken resolves a personal access token to its owner.
-func (s *Server) userFromToken(token string) *store.User {
-	u, err := s.st.UserFromToken(token)
-	if err != nil {
-		return nil
-	}
-	return u
 }
 
 // body decodes and caches the JSON (or form) body.

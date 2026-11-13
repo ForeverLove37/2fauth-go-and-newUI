@@ -20,6 +20,14 @@ func (s *Server) registerRoutes() {
 	s.add(http.MethodGet, "agents.md", s.agentGuide)
 	s.add(http.MethodGet, "llms.txt", s.agentGuide)
 
+	// Android app: the latest build, public, and its publication by administrators
+	s.add(http.MethodGet, "api/v1/android/latest", s.androidLatest)
+	s.addStatic(http.MethodGet, "download/android/{file}", s.androidDownload)
+	s.addAdmin(http.MethodGet, "api/v1/android/releases", s.androidList)
+	s.addAdmin(http.MethodPost, "api/v1/android/releases", s.androidPublish)
+	s.limitBody(androidMaxAPK + 1<<20)
+	s.addAdmin(http.MethodDelete, "api/v1/android/releases/{code}", s.androidDelete)
+
 	// --- socialite ----------------------------------------------------------
 	// Only the OpenID Connect driver is implemented; any other driver answers
 	// 501 like the pre-SSO build did.
@@ -44,6 +52,10 @@ func (s *Server) registerRoutes() {
 	s.addAuth(http.MethodGet, "oauth/personal-access-tokens", s.listPersonalAccessTokens)
 	s.addAuth(http.MethodPost, "oauth/personal-access-tokens", s.createPersonalAccessToken)
 	s.addAuth(http.MethodDelete, "oauth/personal-access-tokens/{token_id}", s.deletePersonalAccessToken)
+	s.addAuth(http.MethodPost, "api/v1/device-tokens", s.createDeviceToken)
+
+	// phone app: the copies it keeps of the accounts synced to phones
+	s.addAuth(http.MethodGet, "api/v1/sync", s.syncAccounts)
 
 	// SSH keys of the command line service
 	s.addAuth(http.MethodGet, "api/v1/ssh-keys", s.listSSHKeys)
@@ -113,6 +125,7 @@ func (s *Server) registerRoutes() {
 	s.addAuth(http.MethodGet, "api/v1/twofaccounts/{twofaccount}/qrcode", s.accountQrCode)
 	s.addAuth(http.MethodGet, "api/v1/twofaccounts/{twofaccount}/otp-logs", s.accountOtpLogs)
 	s.addAuth(http.MethodPatch, "api/v1/twofaccounts/{twofaccount}/favorite", s.favoriteAccount)
+	s.addAuth(http.MethodPatch, "api/v1/twofaccounts/{twofaccount}/phone-sync", s.setPhoneSync)
 	s.addAuth(http.MethodPatch, "api/v1/twofaccounts/{twofaccount}/owner", s.transferOwnership)
 	s.addAuth(http.MethodGet, "api/v1/twofaccounts/{twofaccount}/shares", s.listShares)
 	s.addAuth(http.MethodPost, "api/v1/twofaccounts/{twofaccount}/shares", s.createShares)

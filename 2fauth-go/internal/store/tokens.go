@@ -129,6 +129,35 @@ func (s *Store) RevokeAllTokens(userID int64) error {
 	return err
 }
 
+// DeviceScope marks the token of a phone app: it may only call the endpoints a phone
+// needs, and never reads the secret of an account that is not synced to phones.
+const DeviceScope = "device"
+
+// TokenFromPlain resolves a plain token to its record and its owner.
+func (s *Store) TokenFromPlain(plain string) (*Token, *User, error) {
+	row := s.DB.QueryRow(`SELECT `+tokenColumns+` FROM oauth_access_tokens WHERE token_hash = ? AND revoked = ?`,
+		crypt.SHA256Hex(plain), false)
+	tok, err := s.scanToken(row.Scan)
+	if err != nil {
+		return nil, nil, ErrNotFound
+	}
+	user, err := s.GetUser(tok.UserID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tok, user, nil
+}
+
+// HasScope reports whether the token carries a scope.
+func (t *Token) HasScope(scope string) bool {
+	for _, have := range t.Scopes {
+		if have == scope {
+			return true
+		}
+	}
+	return false
+}
+
 // UserFromToken resolves a plain personal access token to its owner.
 func (s *Store) UserFromToken(plain string) (*User, error) {
 	var userID db.NullInt

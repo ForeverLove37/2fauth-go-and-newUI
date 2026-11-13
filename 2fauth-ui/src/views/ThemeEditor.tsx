@@ -6,9 +6,18 @@ import { download, stamp } from '../lib/format'
 import { fontChoices, monoChoices, previewStyle } from '../theme/apply'
 import { presets } from '../theme/presets'
 import { useThemeStore } from '../theme/store'
-import type { BackgroundStyle, RenderQuality, ThemeConfig } from '../theme/types'
+import type { BackgroundStyle, CardStyle, RenderQuality, ThemeConfig } from '../theme/types'
 import { useT } from '../i18n'
 import { useStore } from '../store/useStore'
+
+/** The card styles; the labels are English message ids. */
+const cardStyles: { id: CardStyle; label: string }[] = [
+  { id: 'classic', label: 'Classic strip' },
+  { id: 'mesh', label: 'Ambient top glow' },
+  { id: 'double', label: 'Double border' },
+  { id: 'pill', label: 'Pill badge' },
+  { id: 'bento', label: 'Bento' },
+]
 
 function ColorField({
   label,
@@ -136,6 +145,20 @@ export default function ThemeEditor() {
         <div className="theme-grid">
           {presets.map((preset) => (
             <Swatch key={preset.id} theme={preset} active={theme.id === preset.id} onClick={() => usePreset(preset.id)} />
+          ))}
+        </div>
+      </Section>
+
+      <Section id="theme-cards" title={t('Card style')} hint={t('How the account cards look, in the panel and the phone app alike.')}>
+        <div className="card-style-picker">
+          {cardStyles.map((style) => (
+            <button
+              key={style.id}
+              className={`chip${(theme.surface.cardStyle ?? 'classic') === style.id ? ' active' : ''}`}
+              onClick={() => patchSurface({ cardStyle: style.id })}
+            >
+              {t(style.label)}
+            </button>
           ))}
         </div>
       </Section>

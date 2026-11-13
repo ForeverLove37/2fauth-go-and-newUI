@@ -25,10 +25,14 @@ export interface Palette {
   warn: string
 }
 
+/** Look of the account cards: the original strip, or one of the newer styles. */
+export type CardStyle = 'classic' | 'mesh' | 'double' | 'pill' | 'bento'
+
 export interface SurfaceConfig {
   radius: number
   blur: number
   cardGradient: boolean
+  cardStyle?: CardStyle
 }
 
 export interface TypographyConfig {

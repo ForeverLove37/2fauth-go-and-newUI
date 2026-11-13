@@ -44,6 +44,11 @@ data class Account(
     @SerialName("borrowed_by") val borrowedBy: String? = null,
     @SerialName("is_shared") val isShared: Boolean = false,
     @SerialName("is_shared_with_all") val isSharedWithAll: Boolean = false,
+    /** the phone keeps a copy of the secret: a "normal" code rather than a cloud one */
+    @SerialName("phone_sync") val phoneSync: Boolean = false,
+    /** only in the sync feed, and only for the accounts synced to phones */
+    val secret: String? = null,
+    val revision: String? = null,
     val otp: OtpPayload? = null,
 ) {
     val isHotp: Boolean get() = otpType == "hotp"
@@ -121,3 +126,21 @@ class ApiException(
         }
     }
 }
+
+@Serializable
+data class SyncFeed(
+    val synced: List<Account> = emptyList(),
+    @SerialName("cloud_ids") val cloudIds: List<Long> = emptyList(),
+    @SerialName("server_time") val serverTime: Long = 0,
+)
+
+@Serializable
+data class AndroidRelease(
+    @SerialName("version_code") val versionCode: Long,
+    @SerialName("version_name") val versionName: String,
+    val notes: String = "",
+    val size: Long = 0,
+    val sha256: String = "",
+    val url: String,
+    @SerialName("published_at") val publishedAt: Long = 0,
+)

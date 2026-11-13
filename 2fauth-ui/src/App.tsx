@@ -12,6 +12,7 @@ import { useThemeStore } from './theme/store'
 const Dashboard = lazy(() => import('./views/Dashboard'))
 const Settings = lazy(() => import('./views/Settings'))
 const Agents = lazy(() => import('./views/Agents'))
+const Landing = lazy(() => import('./views/Landing'))
 
 function Booting() {
   const t = useT()
@@ -26,7 +27,17 @@ function Booting() {
 function Protected({ children }: { children: React.ReactNode }) {
   const user = useStore((state) => state.user)
   const location = useLocation()
-  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />
+  if (!user) {
+    // Visitors who are not signed in land on the presentation of the project.
+    if (location.pathname === '/') {
+      return (
+        <Suspense fallback={<Booting />}>
+          <Landing />
+        </Suspense>
+      )
+    }
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />
+  }
   return <>{children}</>
 }
 

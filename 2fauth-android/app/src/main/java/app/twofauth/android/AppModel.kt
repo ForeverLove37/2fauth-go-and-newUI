@@ -6,16 +6,22 @@ import androidx.biometric.BiometricManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.twofauth.android.data.Account
+import app.twofauth.android.data.AndroidRelease
 import app.twofauth.android.data.Api
 import app.twofauth.android.data.ApiException
 import app.twofauth.android.data.FrontendConfig
 import app.twofauth.android.data.Group
 import app.twofauth.android.data.ImportResult
-import app.twofauth.android.data.LocalSettings
+import app.twofauth.android.data.Kind
+import app.twofauth.android.data.LocalAccount
+import app.twofauth.android.data.OtpAuth
+import app.twofauth.android.data.OtpEngine
 import app.twofauth.android.data.OtpPayload
+import app.twofauth.android.data.ParsedAccount
 import app.twofauth.android.data.SessionJar
+import app.twofauth.android.data.SyncEngine
+import app.twofauth.android.data.Updates
 import app.twofauth.android.data.User
-import app.twofauth.android.data.Vault
 import app.twofauth.android.data.isHostnameMismatch
 import app.twofauth.android.data.json
 import app.twofauth.android.data.needsRefresh
@@ -24,6 +30,7 @@ import app.twofauth.android.data.peekCertificate
 import app.twofauth.android.data.sha256
 import app.twofauth.android.data.untrustedCertificate
 import app.twofauth.android.ui.LOCK_AUTHENTICATORS
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -32,12 +39,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.Cookie
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
-/** A certificate the user is asked to trust, with what to do once it is. */
+/** A certificate the user is asked to trust. */
 data class CertificatePrompt(val server: String, val fingerprint: String, val subject: String, val hostnameOnly: Boolean)
 
 data class UiState(
@@ -46,57 +56,89 @@ data class UiState(
     val config: FrontendConfig? = null,
     val user: User? = null,
     val viaToken: Boolean = true,
-    val accounts: List<Account> = emptyList(),
+    /** cloud-only codes: their secret stays on the server */
+    val cloud: List<Account> = emptyList(),
     val groups: List<Group> = emptyList(),
-    val loading: Boolean = false,
-    val refreshing: Boolean = false,
+    val cloudLoading: Boolean = false,
+    val cloudRefreshing: Boolean = false,
+    val cloudError: String? = null,
     val busy: Boolean = false,
     val error: String? = null,
     val message: String? = null,
     val certificate: CertificatePrompt? = null,
-    /** Codes of HOTP accounts the user asked for in this session. */
     val hotp: Map<Long, OtpPayload> = emptyMap(),
     val locked: Boolean = false,
+    val syncing: Boolean = false,
+    val lastSync: Long = 0,
+    val syncError: String? = null,
+    val update: AndroidRelease? = null,
+    val downloading: Float? = null,
 )
 
 class AppModel(application: Application) : AndroidViewModel(application) {
-    private val vault = Vault(application)
-    val settings = LocalSettings(application)
+    private val app = application as TwoFAuthApp
+    private val vault = app.vault
+    val settings = app.settings
+    val store = app.store
+    val icons = app.icons
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state
 
     private var api: Api? = null
     private var ticker: Job? = null
-    private var lastRefresh = 0L
+    private var lastCloudRefresh = 0L
     private var backgroundSince = 0L
+    private val syncLock = Mutex()
+    private var pendingSync: Job? = null
 
     init {
         viewModelScope.launch { restore() }
+        viewModelScope.launch {
+            // While the app is open, a signed-in phone syncs every few minutes.
+            while (isActive) {
+                delay(SYNC_INTERVAL)
+                if (backgroundSince == 0L && api != null) sync()
+            }
+        }
+        if (settings.checkUpdates) viewModelScope.launch { checkUpdate(manual = false) }
     }
+
+    private fun string(id: Int, vararg args: Any): String = getApplication<Application>().getString(id, *args)
 
     // ------------------------------------------------------------------ session
 
     private suspend fun restore() {
+        if (!store.loaded.value) store.load()
         val server = vault.get(KEY_SERVER)
         if (server == null) {
-            _state.update { it.copy(ready = true, server = settings.lastServer) }
+            _state.update { it.copy(ready = true, server = settings.lastServer, locked = lockEnabled() && store.accounts.value.isNotEmpty()) }
             return
         }
-        val pin = vault.get(KEY_PIN)
-        val restored = Api(server, pin, vault.get(KEY_TOKEN), SessionJar(SessionJar.parse(server, vault.get(KEY_COOKIES))))
+        val restored = Api(server, vault.get(KEY_PIN), vault.get(KEY_TOKEN), SessionJar(SessionJar.parse(server, vault.get(KEY_COOKIES))))
         api = restored
         val cachedUser = vault.get(KEY_USER)?.let { runCatching { json.decodeFromString<User>(it) }.getOrNull() }
-        _state.update {
-            it.copy(
-                ready = true,
-                server = server,
-                user = cachedUser,
-                viaToken = restored.token != null,
-                locked = lockEnabled(),
-            )
+        _state.update { it.copy(ready = true, server = server, user = cachedUser, viaToken = restored.token != null, locked = lockEnabled()) }
+        viewModelScope.launch {
+            upgradeToken(restored)
+            sync()
+            refreshCloud(initial = true)
         }
-        refresh(initial = true)
     }
+
+    /** Version 1.0 signed in with a full token: swap it for a device token once. */
+    private suspend fun upgradeToken(target: Api) {
+        if (target.token == null || vault.get(KEY_TOKEN_KIND) == "device") return
+        val created = runCatching { target.createDeviceToken(deviceName()) }.getOrNull() ?: return
+        val oldId = vault.get(KEY_TOKEN_ID)
+        val old = target.token
+        target.token = created.accessToken
+        if (oldId != null && old != null) runCatching { Api(target.base, target.pin, old).deleteToken(oldId) }
+        vault.put(KEY_TOKEN, created.accessToken)
+        vault.put(KEY_TOKEN_ID, created.accessTokenId)
+        vault.put(KEY_TOKEN_KIND, "device")
+    }
+
+    private fun deviceName() = "Android · ${Build.MANUFACTURER} ${Build.MODEL}".take(255)
 
     private fun persist(target: Api, user: User?) {
         vault.put(KEY_SERVER, target.base)
@@ -107,7 +149,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         settings.lastServer = target.base
     }
 
-    /** First step of signing in: is there a 2FAuth server at that address? */
     fun connect(input: String, pin: String? = null) {
         val server = normalizeServer(input)
         _state.update { it.copy(busy = true, error = null, server = server) }
@@ -130,10 +171,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             val certificate = untrusted ?: withContext(Dispatchers.IO) { peekCertificate(server) }
             if (certificate != null) {
                 _state.update {
-                    it.copy(
-                        busy = false,
-                        certificate = CertificatePrompt(server, certificate.sha256(), certificate.subjectX500Principal.name, untrusted == null),
-                    )
+                    it.copy(busy = false, certificate = CertificatePrompt(server, certificate.sha256(), certificate.subjectX500Principal.name, untrusted == null))
                 }
                 return
             }
@@ -146,7 +184,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun dismissCertificate() = _state.update { it.copy(certificate = null) }
 
     fun resetServer() {
-        api = null
+        if (_state.value.user == null) api = null
         _state.update { it.copy(config = null, error = null) }
     }
 
@@ -164,7 +202,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** The cookies left in the web view by a single sign-on, as "name" to "value". */
     fun signInWithCookies(cookies: Map<String, String>) {
         val target = api ?: return
         _state.update { it.copy(busy = true, error = null) }
@@ -172,9 +209,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             val url = target.base.toHttpUrl()
             val path = url.encodedPath.ifEmpty { "/" }
             target.jar.saveFromResponse(url, cookies.map { (name, value) ->
-                Cookie.Builder().name(name).value(value).hostOnlyDomain(url.host).path(path)
-                    .apply { if (url.isHttps) secure() }
-                    .build()
+                Cookie.Builder().name(name).value(value).hostOnlyDomain(url.host).path(path).apply { if (url.isHttps) secure() }.build()
             })
             try {
                 finishSignIn(target)
@@ -185,17 +220,24 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** A pasted token is only used to obtain the token of this phone; it stays valid. */
     fun signInWithToken(token: String) {
         val target = api ?: return
         target.token = token.trim()
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             try {
-                val user = target.me()
-                vault.put(KEY_TOKEN_ID, null)
-                persist(target, user)
-                _state.update { it.copy(busy = false, user = user, viaToken = true) }
-                refresh(initial = true)
+                target.me()
+                val created = runCatching { target.createDeviceToken(deviceName()) }.getOrNull()
+                if (created != null) {
+                    target.token = created.accessToken
+                    vault.put(KEY_TOKEN_ID, created.accessTokenId)
+                    vault.put(KEY_TOKEN_KIND, "device")
+                } else {
+                    vault.put(KEY_TOKEN_ID, null)
+                    vault.put(KEY_TOKEN_KIND, null)
+                }
+                completeSignIn(target)
             } catch (error: Throwable) {
                 target.token = null
                 _state.update { it.copy(busy = false, error = describe(error)) }
@@ -204,24 +246,43 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * A session cookie expires after two idle hours: the app swaps it for a token of its
-     * own, revocable from the web panel, and closes the session. A server that refuses
-     * tokens (single sign-on only) keeps the session.
+     * The session cookie of a sign-in is swapped for a device token: it does not expire
+     * after two idle hours, the user can revoke it on the web, and the server refuses it
+     * anything a phone does not need. Servers that refuse tokens keep the session.
      */
     private suspend fun finishSignIn(target: Api) {
-        val user = target.me()
-        val created = runCatching { target.createToken("Android · ${Build.MANUFACTURER} ${Build.MODEL}".take(255)) }.getOrNull()
+        target.me()
+        val created = runCatching { target.createDeviceToken(deviceName()) }.getOrNull()
         if (created != null) {
             target.endSession()
             target.token = created.accessToken
             vault.put(KEY_TOKEN_ID, created.accessTokenId)
+            vault.put(KEY_TOKEN_KIND, "device")
         }
-        persist(target, user)
-        _state.update { it.copy(busy = false, user = user, viaToken = target.token != null) }
-        refresh(initial = true)
+        completeSignIn(target)
     }
 
-    fun signOut() {
+    private suspend fun completeSignIn(target: Api) {
+        val user = target.me()
+        // Synced copies that belong to another server become phone-only ones.
+        val previous = vault.get(KEY_SYNCED_SERVER)
+        if (previous != null && previous != target.base) {
+            store.update { list -> list.map { if (it.kind == Kind.SYNCED) it.copy(kind = Kind.LOCAL, serverId = null, revision = null) else it } }
+        }
+        vault.put(KEY_SYNCED_SERVER, target.base)
+        persist(target, user)
+        _state.update { it.copy(busy = false, user = user, viaToken = target.token != null, server = target.base) }
+        say(string(R.string.signed_in_as, user.name))
+        sync()
+        refreshCloud(initial = true)
+        if (settings.checkUpdates) checkUpdate(manual = false)
+    }
+
+    /**
+     * Signing out keeps the codes of the phone. Synced copies become phone-only ones when
+     * [keepSynced], and are removed otherwise (they stay on the server).
+     */
+    fun signOut(keepSynced: Boolean) {
         val target = api
         viewModelScope.launch {
             if (target != null) {
@@ -229,61 +290,201 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 if (target.token != null && tokenId != null) runCatching { target.deleteToken(tokenId) }
                 if (target.token == null) target.endSession()
             }
-            clearLocal()
+            store.update { list ->
+                if (keepSynced) list.map { if (it.kind == Kind.SYNCED) it.copy(kind = Kind.LOCAL, serverId = null, revision = null, dirty = false) else it }
+                else list.filter { it.kind != Kind.SYNCED }
+            }
+            clearSession()
         }
     }
 
-    private fun clearLocal(message: String? = null) {
+    private fun clearSession(message: String? = null) {
         val server = api?.base ?: _state.value.server
         api = null
         ticker?.cancel()
-        vault.clear()
+        listOf(KEY_SERVER, KEY_PIN, KEY_TOKEN, KEY_TOKEN_ID, KEY_TOKEN_KIND, KEY_COOKIES, KEY_USER).forEach { vault.put(it, null) }
         settings.lastServer = server
-        _state.value = UiState(ready = true, server = server, error = message)
+        _state.update { UiState(ready = true, server = server, message = message, update = it.update) }
     }
 
-    // ------------------------------------------------------------------ data
+    val signedIn: Boolean get() = api != null && _state.value.user != null
 
-    fun iconUrl(icon: String?): String? = api?.iconUrl(icon)
+    // ------------------------------------------------------------------ codes on the phone
 
-    fun pinOf(): String? = api?.pin
+    /** Saves accounts read from a QR code or a link. Returns how many were new. */
+    suspend fun addParsed(parsed: List<ParsedAccount>, kind: Kind, group: String = ""): Int {
+        val fresh = parsed.filter { !store.hasSecret(it.secret) }
+        for (item in fresh) {
+            store.add(
+                LocalAccount(
+                    kind = if (kind == Kind.SYNCED && signedIn) Kind.SYNCED else Kind.LOCAL,
+                    service = item.service, account = item.account, secret = item.secret.uppercase(),
+                    otpType = item.otpType, digits = item.digits, algorithm = item.algorithm,
+                    period = item.period, counter = item.counter, group = group, dirty = kind == Kind.SYNCED,
+                ),
+            )
+        }
+        if (fresh.isNotEmpty() && kind == Kind.SYNCED) scheduleSync()
+        return fresh.size
+    }
 
-    /** The HTTP client of the server, so that icons go through the same certificate trust. */
-    fun http(): okhttp3.OkHttpClient? = api?.client
+    /** Sends accounts to the server as cloud-only codes: the phone keeps nothing. */
+    suspend fun addToCloud(parsed: List<ParsedAccount>): Int {
+        val target = api ?: return 0
+        var count = 0
+        for (item in parsed) {
+            val created = call {
+                target.create(buildJsonObject {
+                    put("otp_type", item.otpType)
+                    put("service", item.service)
+                    put("account", item.account.ifBlank { item.service.ifBlank { "-" } })
+                    put("secret", item.secret)
+                    if (item.otpType != "steamtotp") {
+                        put("digits", item.digits)
+                        put("algorithm", item.algorithm)
+                    }
+                    if (item.otpType == "hotp") put("counter", item.counter) else put("period", item.period)
+                })
+            }
+            if (created != null) count++
+        }
+        refreshCloud()
+        return count
+    }
 
-    fun refresh(initial: Boolean = false, manual: Boolean = false) {
-        val target = api ?: return
-        if (_state.value.user == null && !initial) return
-        lastRefresh = System.currentTimeMillis()
-        _state.update { it.copy(loading = initial && it.accounts.isEmpty(), refreshing = manual) }
+    fun edit(account: LocalAccount) {
         viewModelScope.launch {
+            store.replace(if (account.kind == Kind.SYNCED) account.copy(dirty = true) else account)
+            if (account.kind == Kind.SYNCED) scheduleSync()
+        }
+    }
+
+    fun toggleFavorite(account: LocalAccount) = edit(account.copy(favorite = !account.favorite))
+
+    /** Deleting a synced code deletes it on the server too (at the next sync if offline). */
+    fun delete(account: LocalAccount) {
+        viewModelScope.launch {
+            store.remove(account.id)
+            if (account.kind == Kind.SYNCED) scheduleSync()
+        }
+    }
+
+    /** The next code of an HOTP account: the counter moves forward on the phone. */
+    suspend fun nextHotp(account: LocalAccount): String {
+        val code = runCatching { OtpEngine.hotp(account.secret, account.counter, account.digits, account.algorithm) }.getOrDefault("")
+        if (code.isNotEmpty()) edit(account.copy(counter = account.counter + 1))
+        return code
+    }
+
+    /** Phone-only → synced. The caller has verified the user (fingerprint, screen lock). */
+    fun makeSynced(account: LocalAccount) {
+        val target = api ?: return say(string(R.string.need_server))
+        viewModelScope.launch {
+            _state.update { it.copy(syncing = true) }
             try {
-                val accounts = target.accounts()
-                val groups = runCatching { target.groups() }.getOrDefault(_state.value.groups)
-                val user = if (initial || manual) runCatching { target.me() }.getOrNull() else null
-                if (user != null) vault.put(KEY_USER, json.encodeToString(User.serializer(), user))
-                _state.update {
-                    it.copy(
-                        accounts = accounts,
-                        groups = groups,
-                        user = user ?: it.user,
-                        loading = false,
-                        refreshing = false,
-                        error = null,
-                    )
-                }
-                startTicker()
+                val synced = SyncEngine(target, store).upload(account)
+                store.replace(synced)
+                vault.put(KEY_SYNCED_SERVER, target.base)
+                say(string(R.string.now_synced, account.label()))
             } catch (error: Throwable) {
-                if (error is ApiException && error.isAuth) {
-                    clearLocal(getApplication<Application>().getString(R.string.session_expired))
-                    return@launch
-                }
-                _state.update { it.copy(loading = false, refreshing = false, error = describe(error)) }
+                report(error)
+            } finally {
+                _state.update { it.copy(syncing = false) }
             }
         }
     }
 
-    /** Fetches new codes as soon as a card has moved on to the last code it knows. */
+    /** Synced → phone-only: the server deletes its copy. */
+    fun makeLocal(account: LocalAccount) {
+        val target = api ?: return
+        val serverId = account.serverId ?: return
+        viewModelScope.launch {
+            try {
+                target.delete(serverId)
+                store.replace(account.copy(kind = Kind.LOCAL, serverId = null, revision = null, dirty = false, detached = false))
+                say(string(R.string.now_local, account.label()))
+            } catch (error: Throwable) {
+                report(error)
+            }
+        }
+    }
+
+    /** Synced → cloud-only: the server keeps it, the phone forgets the secret. */
+    fun makeCloud(account: LocalAccount) {
+        val target = api ?: return
+        val serverId = account.serverId ?: return
+        viewModelScope.launch {
+            try {
+                target.setPhoneSync(serverId, false)
+                store.update { list -> list.filter { it.id != account.id } }
+                say(string(R.string.now_cloud, account.label()))
+                refreshCloud()
+            } catch (error: Throwable) {
+                report(error)
+            }
+        }
+    }
+
+    /** A detached copy stays on the phone: the flag only told the user. */
+    fun acknowledgeDetached(account: LocalAccount) = edit(account.copy(detached = false))
+
+    private fun scheduleSync() {
+        pendingSync?.cancel()
+        pendingSync = viewModelScope.launch {
+            delay(1500)
+            sync()
+        }
+    }
+
+    fun sync(manual: Boolean = false) {
+        val target = api ?: return
+        viewModelScope.launch {
+            if (!syncLock.tryLock()) return@launch
+            try {
+                _state.update { it.copy(syncing = true) }
+                val result = SyncEngine(target, store).run()
+                _state.update { it.copy(syncing = false, lastSync = System.currentTimeMillis(), syncError = null) }
+                val changes = result.received + result.updatedFromServer + result.detached + result.removed
+                when {
+                    result.detached > 0 -> say(string(R.string.sync_detached, result.detached))
+                    manual && changes + result.sent == 0 -> say(string(R.string.sync_nothing))
+                    manual || changes > 0 -> say(string(R.string.sync_done, result.received + result.updatedFromServer, result.sent))
+                }
+            } catch (error: Throwable) {
+                if (error is ApiException && error.isAuth) {
+                    clearSession(string(R.string.session_expired))
+                } else {
+                    _state.update { it.copy(syncing = false, syncError = describe(error)) }
+                    if (manual) say(describe(error))
+                }
+            } finally {
+                syncLock.unlock()
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ cloud codes
+
+    fun refreshCloud(initial: Boolean = false, manual: Boolean = false) {
+        val target = api ?: return
+        lastCloudRefresh = System.currentTimeMillis()
+        _state.update { it.copy(cloudLoading = initial && it.cloud.isEmpty(), cloudRefreshing = manual) }
+        viewModelScope.launch {
+            try {
+                val accounts = target.accounts().filter { !it.phoneSync || it.isBorrowed }
+                val groups = runCatching { target.groups() }.getOrDefault(_state.value.groups)
+                _state.update { it.copy(cloud = accounts, groups = groups, cloudLoading = false, cloudRefreshing = false, cloudError = null) }
+                startTicker()
+            } catch (error: Throwable) {
+                if (error is ApiException && error.isAuth) {
+                    clearSession(string(R.string.session_expired))
+                    return@launch
+                }
+                _state.update { it.copy(cloudLoading = false, cloudRefreshing = false, cloudError = describe(error)) }
+            }
+        }
+    }
+
     private fun startTicker() {
         if (ticker?.isActive == true) return
         ticker = viewModelScope.launch {
@@ -291,49 +492,19 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 delay(1000)
                 if (backgroundSince > 0) continue
                 val now = System.currentTimeMillis()
-                val due = _state.value.accounts.any { it.needsRefresh(now) }
-                if (due && now - lastRefresh > MIN_REFRESH_GAP) refresh()
+                if (_state.value.cloud.any { it.needsRefresh(now) } && now - lastCloudRefresh > MIN_REFRESH_GAP) refreshCloud()
             }
         }
     }
 
-    fun onForeground() {
-        val away = if (backgroundSince > 0) System.currentTimeMillis() - backgroundSince else 0
-        backgroundSince = 0
-        if (_state.value.user != null && lockEnabled() && away > settings.lockAfter * 1000L) {
-            _state.update { it.copy(locked = true) }
-        }
-        // Codes fetched before the phone slept are stale.
-        if (_state.value.user != null && away > 0) refresh()
-    }
-
-    fun onBackground() {
-        backgroundSince = System.currentTimeMillis()
-        // Lock right away when "immediately" is chosen, so the recent apps screen shows the lock.
-        if (lockEnabled() && settings.lockAfter == 0 && _state.value.user != null) {
-            _state.update { it.copy(locked = true) }
-        }
-    }
-
-    fun unlock() = _state.update { it.copy(locked = false) }
-
-    fun lockNow() {
-        if (lockEnabled()) _state.update { it.copy(locked = true) }
-    }
-
-    /** A lock the phone cannot open (no screen lock set) would lock the user out. */
-    fun lockEnabled(): Boolean = settings.appLock &&
-        BiometricManager.from(getApplication()).canAuthenticate(LOCK_AUTHENTICATORS) == BiometricManager.BIOMETRIC_SUCCESS
-
-    suspend fun hotp(account: Account): OtpPayload? {
+    suspend fun cloudHotp(account: Account): OtpPayload? {
         val target = api ?: return null
         return try {
             val payload = target.otp(account.id)
-            // The counter moved on the server: the badge of the card follows.
             _state.update { state ->
                 state.copy(
                     hotp = state.hotp + (account.id to payload),
-                    accounts = state.accounts.map { if (it.id == account.id && payload.counter != null) it.copy(counter = payload.counter) else it },
+                    cloud = state.cloud.map { if (it.id == account.id && payload.counter != null) it.copy(counter = payload.counter) else it },
                 )
             }
             payload
@@ -343,35 +514,96 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setFavorite(account: Account, value: Boolean) = mutate {
+    fun setCloudFavorite(account: Account, value: Boolean) = mutate {
         it.favorite(account.id, value)
-        _state.update { state -> state.copy(accounts = state.accounts.map { a -> if (a.id == account.id) a.copy(isFavorite = value) else a }) }
+        _state.update { s -> s.copy(cloud = s.cloud.map { a -> if (a.id == account.id) a.copy(isFavorite = value) else a }) }
     }
 
-    fun moveToGroup(account: Account, group: Group?) = mutate {
-        if (group == null) it.withdraw(listOf(account.id)) else it.assign(group.id, listOf(account.id))
-        refresh()
-    }
-
-    fun delete(account: Account) = mutate {
+    fun deleteCloud(account: Account) = mutate {
         it.delete(account.id)
-        _state.update { state -> state.copy(accounts = state.accounts.filter { a -> a.id != account.id }) }
+        _state.update { s -> s.copy(cloud = s.cloud.filter { a -> a.id != account.id }) }
     }
 
-    fun setServerPreference(key: String, value: Boolean) = mutate {
-        it.setPreference(key, value)
-        val user = it.me()
-        vault.put(KEY_USER, json.encodeToString(User.serializer(), user))
-        _state.update { state -> state.copy(user = user) }
+    suspend fun importToServer(payload: String): ImportResult? = call { it.import(payload) }?.also { refreshCloud() }
+
+    // ------------------------------------------------------------------ icons
+
+    /** Icons already resolved in this process, so that a scrolled card shows its logo at once. */
+    val iconMemo = java.util.concurrent.ConcurrentHashMap<Any, File>()
+
+    /** A cached file for an account's logo, fetched on first use. */
+    suspend fun iconFile(local: LocalAccount): File? {
+        val target = api
+        if (local.icon != null && target != null && local.kind == Kind.SYNCED) {
+            icons.fromServer(target, local.icon)?.let { return it }
+        }
+        if (!settings.publicIcons || local.service.isBlank()) return null
+        return icons.forService(local.service)
     }
 
-    suspend fun decodeQr(jpeg: ByteArray): String? = call { it.decodeQr(jpeg) }
+    suspend fun iconFile(cloud: Account): File? {
+        val target = api ?: return null
+        val name = cloud.icon ?: return if (settings.publicIcons && !cloud.service.isNullOrBlank()) icons.forService(cloud.service) else null
+        return icons.fromServer(target, name)
+    }
 
-    suspend fun preview(uri: String): Account? = call { it.preview(uri) }
+    // ------------------------------------------------------------------ lock and lifecycle
 
-    suspend fun create(fields: JsonObject): Account? = call { it.create(fields) }?.also { refresh() }
+    fun onForeground() {
+        val away = if (backgroundSince > 0) System.currentTimeMillis() - backgroundSince else 0
+        backgroundSince = 0
+        if (lockEnabled() && away > settings.lockAfter * 1000L) _state.update { it.copy(locked = true) }
+        if (api != null && away > 0) {
+            sync()
+            refreshCloud()
+        }
+    }
 
-    suspend fun import(payload: String): ImportResult? = call { it.import(payload) }?.also { refresh() }
+    fun onBackground() {
+        backgroundSince = System.currentTimeMillis()
+        if (lockEnabled() && settings.lockAfter == 0) _state.update { it.copy(locked = true) }
+    }
+
+    fun unlock() = _state.update { it.copy(locked = false) }
+
+    fun lockNow() {
+        if (lockEnabled()) _state.update { it.copy(locked = true) }
+    }
+
+    fun canVerifyUser(): Boolean =
+        BiometricManager.from(getApplication()).canAuthenticate(LOCK_AUTHENTICATORS) == BiometricManager.BIOMETRIC_SUCCESS
+
+    fun lockEnabled(): Boolean = settings.appLock && canVerifyUser()
+
+    // ------------------------------------------------------------------ updates
+
+    fun checkUpdate(manual: Boolean) {
+        viewModelScope.launch {
+            val release = Updates.latest(getApplication())
+            _state.update { it.copy(update = release) }
+            if (manual && release == null) say(string(R.string.update_none, BuildConfig.VERSION_NAME))
+        }
+    }
+
+    fun installUpdate() {
+        val release = _state.value.update ?: return
+        if (_state.value.downloading != null) return
+        viewModelScope.launch {
+            _state.update { it.copy(downloading = 0f) }
+            try {
+                val file = Updates.download(getApplication(), release) { progress -> _state.update { it.copy(downloading = progress) } }
+                _state.update { it.copy(downloading = null) }
+                if (!Updates.install(getApplication(), file)) say(string(R.string.update_allow))
+            } catch (error: Throwable) {
+                _state.update { it.copy(downloading = null) }
+                say(describe(error))
+            }
+        }
+    }
+
+    fun dismissUpdate() = _state.update { it.copy(update = null) }
+
+    // ------------------------------------------------------------------ messages
 
     fun say(message: String) = _state.update { it.copy(message = message) }
 
@@ -395,34 +627,40 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     private fun report(error: Throwable) {
         if (error is ApiException && error.isAuth) {
-            clearLocal(getApplication<Application>().getString(R.string.session_expired))
+            clearSession(string(R.string.session_expired))
             return
         }
-        _state.update { it.copy(message = describe(error)) }
+        say(describe(error))
     }
 
-    private fun describe(error: Throwable): String {
-        val app = getApplication<Application>()
-        return when {
-            error is ApiException && error.status == 401 -> app.getString(R.string.error_credentials)
-            error is ApiException && error.status == 403 && error.message.contains("forbidden", true) ->
-                app.getString(R.string.error_forbidden_ip)
-            error is ApiException -> error.message
-            error is kotlinx.serialization.SerializationException -> app.getString(R.string.error_not_2fauth)
-            error is java.net.UnknownHostException -> app.getString(R.string.error_unknown_host)
-            error is java.net.ConnectException || error is java.net.SocketTimeoutException -> app.getString(R.string.error_unreachable)
-            error is javax.net.ssl.SSLException -> app.getString(R.string.error_tls, error.message.orEmpty())
-            else -> error.message ?: error.javaClass.simpleName
-        }
+    fun describe(error: Throwable): String = when {
+        error is ApiException && error.status == 401 -> string(R.string.error_credentials)
+        error is ApiException && error.status == 403 && error.message.contains("forbidden", true) -> string(R.string.error_forbidden_ip)
+        error is ApiException -> error.message
+        error is kotlinx.serialization.SerializationException -> string(R.string.error_not_2fauth)
+        error is java.net.UnknownHostException -> string(R.string.error_unknown_host)
+        error is java.net.ConnectException || error is java.net.SocketTimeoutException -> string(R.string.error_unreachable)
+        error is javax.net.ssl.SSLException -> string(R.string.error_tls, error.message.orEmpty())
+        else -> error.message ?: error.javaClass.simpleName
     }
+
+    fun http(): okhttp3.OkHttpClient? = api?.client
+
+    fun pinOf(): String? = api?.pin
 
     private companion object {
         const val KEY_SERVER = "server"
         const val KEY_PIN = "pin"
         const val KEY_TOKEN = "token"
         const val KEY_TOKEN_ID = "token_id"
+        const val KEY_TOKEN_KIND = "token_kind"
         const val KEY_COOKIES = "cookies"
         const val KEY_USER = "user"
+        const val KEY_SYNCED_SERVER = "synced_server"
         const val MIN_REFRESH_GAP = 4000L
+        const val SYNC_INTERVAL = 3 * 60 * 1000L
     }
 }
+
+/** The link of a local account for the clipboard of another authenticator. */
+fun LocalAccount.otpauth(): String = OtpAuth.uri(this)

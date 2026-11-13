@@ -26,6 +26,8 @@ export interface Account {
   borrowed_by?: string
   is_shared?: boolean
   is_shared_with_all?: boolean
+  /** the phone app keeps a copy of the secret ("normal" code); otherwise the phone only gets codes */
+  phone_sync?: boolean
   otp?: OtpPayload
 }
 

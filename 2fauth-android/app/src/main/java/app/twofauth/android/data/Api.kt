@@ -183,6 +183,56 @@ class Api(val base: String, val pin: String?, var token: String? = null, val jar
 
     suspend fun create(fields: JsonObject): Account = post<Envelope<Account>>("/api/v1/twofaccounts", fields).data
 
+    /** The token of this phone: it reaches only what a phone needs, never a cloud-only secret. */
+    suspend fun createDeviceToken(name: String): CreatedToken =
+        post("/api/v1/device-tokens", buildJsonObject { put("name", name) })
+
+    /** The accounts synced to phones, with their secrets, and the ids of the cloud-only ones. */
+    suspend fun sync(): SyncFeed = get("/api/v1/sync")
+
+    suspend fun update(id: Long, fields: JsonObject): Account = json.decodeFromString<Envelope<Account>>(send("PUT", "/api/v1/twofaccounts/$id", fields)).data
+
+    suspend fun setPhoneSync(id: Long, value: Boolean) {
+        send("PATCH", "/api/v1/twofaccounts/$id/phone-sync", buildJsonObject { put("phone_sync", value) })
+    }
+
+    suspend fun createGroup(name: String): Group = post<Envelope<Group>>("/api/v1/groups", buildJsonObject { put("name", name) }).data
+
+    suspend fun androidLatest(): AndroidRelease = get("/api/v1/android/latest")
+
+    /** Raw bytes of a file of the server (an icon), through the same trust and credentials. */
+    suspend fun bytes(path: String): ByteArray = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(base + path).header("User-Agent", userAgent)
+            .apply { token?.let { header("Authorization", "Bearer $it") } }.build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw ApiException(response.code, "HTTP ${response.code}")
+            response.body?.bytes() ?: ByteArray(0)
+        }
+    }
+
+    /** Streams a file of the server to disk, reporting the progress between 0 and 1. */
+    suspend fun download(path: String, target: java.io.File, progress: (Float) -> Unit) = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(base + path).header("User-Agent", userAgent).build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw ApiException(response.code, "HTTP ${response.code}")
+            val body = response.body ?: throw ApiException(response.code, "empty")
+            val total = body.contentLength().coerceAtLeast(1)
+            var done = 0L
+            target.outputStream().use { out ->
+                body.byteStream().use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        out.write(buffer, 0, read)
+                        done += read
+                        progress((done.toFloat() / total).coerceIn(0f, 1f))
+                    }
+                }
+            }
+        }
+    }
+
     /** Everything that is not a single otpauth:// link: Google Authenticator exports, Aegis, 2FAS… */
     suspend fun import(payload: String): ImportResult = post("/api/v1/twofaccounts/import", buildJsonObject { put("payload", payload) })
 

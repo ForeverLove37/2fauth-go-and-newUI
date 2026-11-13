@@ -72,7 +72,7 @@ import java.security.cert.X509Certificate
 private enum class Method { Password, Token }
 
 @Composable
-fun LoginScreen(model: AppModel, state: UiState) {
+fun LoginScreen(model: AppModel, state: UiState, onBack: () -> Unit) {
     var sso by remember { mutableStateOf(false) }
     if (sso && state.config != null) {
         SsoScreen(state.server, model.pinOf(), onCookies = {
@@ -85,12 +85,16 @@ fun LoginScreen(model: AppModel, state: UiState) {
         return
     }
 
+    BackHandler(onBack = onBack)
     Backdrop {
         Column(
             Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(48.dp))
+            Row(Modifier.fillMaxWidth()) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, stringResource(R.string.back)) }
+            }
+            Spacer(Modifier.height(12.dp))
             BrandMark(64.dp)
             Spacer(Modifier.height(18.dp))
             Text(state.config?.appName ?: "2FAuth", fontSize = 26.sp, fontWeight = FontWeight.Bold)
@@ -129,7 +133,7 @@ fun LoginScreen(model: AppModel, state: UiState) {
             },
             confirmButton = { TextButton(onClick = { model.trustCertificate(prompt) }) { Text(stringResource(R.string.cert_trust), color = Palette.warn) } },
             dismissButton = { TextButton(onClick = model::dismissCertificate) { Text(stringResource(R.string.cancel)) } },
-            containerColor = Palette.panelStrong,
+            containerColor = Palette.sheet,
         )
     }
 }

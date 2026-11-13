@@ -120,6 +120,16 @@ export interface ImportResult {
   issues: { index: number; service: string; reason: string }[] | null
 }
 
+export interface AndroidRelease {
+  version_code: number
+  version_name: string
+  notes: string
+  size: number
+  sha256: string
+  published_at: number
+  url: string
+}
+
 export interface MailSettings {
   mailer: string
   host: string
@@ -274,6 +284,21 @@ export const api = {
   createSshKey: (payload: SshKeyInput & { public_key: string }) => post<SshKey>(`${API}/ssh-keys`, payload),
   updateSshKey: (id: number, payload: SshKeyInput) => put<SshKey>(`${API}/ssh-keys/${id}`, payload),
   deleteSshKey: (id: number) => del<void>(`${API}/ssh-keys/${id}`),
+
+  // Android app releases
+  androidLatest: () => get<AndroidRelease>(`${API}/android/latest`),
+  androidReleases: () => get<AndroidRelease[]>(`${API}/android/releases`),
+  publishAndroid: (file: File, versionCode: number, versionName: string, notes: string) => {
+    const form = new FormData()
+    form.append('apk', file)
+    form.append('version_code', String(versionCode))
+    form.append('version_name', versionName)
+    form.append('notes', notes)
+    return request<AndroidRelease>('POST', `${API}/android/releases`, { form })
+  },
+  deleteAndroid: (code: number) => del<void>(`${API}/android/releases/${code}`),
+  setPhoneSync: async (id: number, value: boolean) =>
+    fromEnvelope(await patch<{ data: Account }>(`${API}/twofaccounts/${id}/phone-sync`, { phone_sync: value })),
 
   // e-mail delivery
   mailSettings: () => get<MailSettings>(`${API}/mail/settings`),

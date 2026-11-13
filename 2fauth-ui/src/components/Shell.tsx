@@ -3,6 +3,7 @@ import { useT } from '../i18n'
 import { isAdminTab } from '../lib/settingsTabs'
 import { useStore } from '../store/useStore'
 import Icon from './Icon'
+import Logo from './Logo'
 
 function initials(name: string): string {
   return name
@@ -36,7 +37,7 @@ export default function Shell() {
       <div className="layer">
         <header className="topbar">
           <div className="brand">
-            <div className="brand-mark">2F</div>
+            <Logo />
             <div>
               {config?.appName ?? '2FAuth'}
               <small>{t('3D control panel')}</small>

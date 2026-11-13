@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="background">#FF05070F</color>
-    <color name="icon_background">#FF08101D</color>
+    <color name="icon_background">#FF0B2E66</color>
 
     <style name="Theme.TwoFAuth" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/background</item>

@@ -110,6 +110,7 @@ export function applyTheme(theme: ThemeConfig, root: HTMLElement = document.docu
   root.dataset.motion = theme.motion.enabled ? 'on' : 'off'
   root.dataset.glass = theme.motion.glass ? 'on' : 'off'
   root.dataset.bg = theme.background?.style ?? 'grid'
+  root.dataset.card = theme.surface.cardStyle ?? 'classic'
   for (const [name, value] of Object.entries(themeToVars(theme))) {
     root.style.setProperty(name, value)
   }

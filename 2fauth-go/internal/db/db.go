@@ -381,6 +381,7 @@ func (d *DB) Migrate() error {
 	upgrades := []string{
 		`ALTER TABLE "groups" ADD COLUMN show_in_chips BOOLEAN NOT NULL DEFAULT TRUE`,
 		`ALTER TABLE twofaccounts ADD COLUMN icon_opt_out BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE twofaccounts ADD COLUMN phone_sync BOOLEAN NOT NULL DEFAULT FALSE`,
 	}
 	for _, stmt := range upgrades {
 		_, _ = d.Exec(stmt) // fails when the column already exists

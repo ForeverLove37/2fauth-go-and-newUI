@@ -233,7 +233,7 @@ async function main() {
   )
   await tick(180)
   const adminLabels = [...adminHost.querySelectorAll('.tabs button')].map((element) => element.textContent ?? '')
-  assert('admin settings show 常规 / 单点登录 / 邮件', adminLabels.length === 3 && adminLabels.some((text) => text.includes('单点登录')))
+  assert('admin settings show 常规 / 单点登录 / 邮件 / Android 应用', adminLabels.length === 4 && adminLabels.some((text) => text.includes('单点登录')) && adminLabels.some((text) => text.includes('Android')))
 
   const ssoTab = [...adminHost.querySelectorAll('.tabs button')].find((element) =>
     element.textContent?.includes('单点登录'),

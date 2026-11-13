@@ -23,6 +23,7 @@ const emptyForm = {
   counter: 0,
   group_id: '',
   icon: '',
+  phone_sync: false,
 }
 
 type Form = typeof emptyForm
@@ -59,6 +60,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
       counter: Number(account.counter ?? 0),
       group_id: account.group_id ? String(account.group_id) : '',
       icon: account.icon ?? '',
+      phone_sync: Boolean(account.phone_sync),
     })
     void loadExtras(account)
     // list responses hide the secret, so fetch the full record before editing
@@ -195,6 +197,7 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
     if (form.otp_type === 'hotp') payload.counter = Number(form.counter)
     else payload.period = Number(form.period)
     if (form.group_id !== '') payload.group_id = Number(form.group_id)
+    if (!account?.is_borrowed) payload.phone_sync = form.phone_sync
     // Sent only when it changed: an empty value means the icon was removed on purpose.
     if (form.icon !== (account?.icon ?? '')) payload.icon = form.icon
 
@@ -337,6 +340,25 @@ export default function AccountModal({ account, groups, onClose, onSaved }: Prop
                 </select>
               </div>
             </div>
+
+            {!account?.is_borrowed && (
+              <div className="switch">
+                <div className="switch-label">
+                  {t('Sync to the phone app')}
+                  <small>
+                    {form.phone_sync
+                      ? t('Phones keep a copy of the secret and work offline; changes made here reach them at their next sync.')
+                      : t('Cloud only: phones get short-lived codes from this server and never the secret.')}
+                  </small>
+                </div>
+                <button
+                  type="button"
+                  className={`toggle${form.phone_sync ? ' on' : ''}`}
+                  aria-pressed={form.phone_sync}
+                  onClick={() => update('phone_sync', !form.phone_sync)}
+                />
+              </div>
+            )}
 
             <div className="row">
               <div className="field">

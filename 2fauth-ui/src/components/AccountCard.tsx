@@ -79,6 +79,7 @@ export const AccountCard = memo(function AccountCard({
   const flags = useMemo(() => {
     const list: { text: string; tone?: 'hot' | 'warn' }[] = []
     if (account.is_favorite) list.push({ text: t('Pinned'), tone: 'hot' })
+    if (account.phone_sync) list.push({ text: t('Phone') })
     if (account.is_borrowed) list.push({ text: t('Borrowed · {name}', { name: account.borrowed_by ?? '' }).trim() })
     else if (account.is_shared_with_all) list.push({ text: t('Everyone') })
     else if (account.is_shared) list.push({ text: t('Shared') })
@@ -124,6 +125,11 @@ export const AccountCard = memo(function AccountCard({
           <strong className="card-text">{accountLabel(account)}</strong>
           <span className="card-text">{accountSubLabel(account)}</span>
         </div>
+        {/* the "pill" card style shows this badge in place of the colour strip */}
+        <span className="card-pill card-text" aria-hidden="true">
+          <i />
+          {isHotp ? 'HOTP' : account.otp_type === 'steamtotp' ? 'Steam' : `${account.period ?? 30}s`}
+        </span>
       </div>
 
       {flags.length > 0 && (

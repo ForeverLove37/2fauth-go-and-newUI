@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import Icon from '../components/Icon'
-import { api } from '../api/client'
+import { api, BASE } from '../api/client'
 import { useStore } from '../store/useStore'
 import { sso, type SsoConfig } from '../api/sso'
 import { locales, useI18nStore, useT } from '../i18n'
 import type { ApiError } from '../api/types'
+import Logo from '../components/Logo'
 
 const ssoErrors: Record<string, string> = {
   cancelled: 'SSO sign-in was cancelled',
@@ -124,7 +125,7 @@ export function Login() {
       <LanguagePicker />
       <form className="auth-card" onSubmit={submit}>
         <div className="auth-hero">
-          <div className="brand-mark">2F</div>
+          <Logo />
           <h1>{t('Welcome back')}</h1>
           <p className="sub">{t('Sign in to your {app} vault', { app: config?.appName ?? '2FAuth' })}</p>
         </div>
@@ -188,6 +189,16 @@ export function Login() {
             {t('No account yet?')} <Link to="/register">{t('Create one')}</Link>
           </p>
         )}
+
+        <p className="auth-switch auth-links">
+          <Link to="/">{t('About {app}', { app: config?.appName ?? '2FAuth' })}</Link>
+          <span aria-hidden="true">·</span>
+          <a href={`${BASE}/#android`} onClick={(event) => { event.preventDefault(); navigate('/'); window.setTimeout(() => document.getElementById('android')?.scrollIntoView(), 400) }}>
+            {t('Android app')}
+          </a>
+          <span aria-hidden="true">·</span>
+          <Link to="/agents">{t('Agents')}</Link>
+        </p>
       </form>
     </div>
   )
@@ -213,7 +224,7 @@ export function PasswordLost() {
       <LanguagePicker />
       <form className="auth-card" onSubmit={submit}>
         <div className="auth-hero">
-          <div className="brand-mark">2F</div>
+          <Logo />
           <h1>{t('Reset your password')}</h1>
           <p className="sub">{t('We will send a link to the address of your account.')}</p>
         </div>
@@ -273,7 +284,7 @@ export function PasswordReset() {
       <LanguagePicker />
       <form className="auth-card" onSubmit={submit}>
         <div className="auth-hero">
-          <div className="brand-mark">2F</div>
+          <Logo />
           <h1>{t('Choose a new password')}</h1>
           <p className="sub">{email}</p>
         </div>
@@ -362,7 +373,7 @@ export function Register() {
       <LanguagePicker />
       <form className="auth-card" onSubmit={submit}>
         <div className="auth-hero">
-          <div className="brand-mark">2F</div>
+          <Logo />
           <h1>{t('Create account')}</h1>
           <p className="sub">{t('The first account becomes the administrator')}</p>
         </div>

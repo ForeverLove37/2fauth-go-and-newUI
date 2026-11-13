@@ -541,6 +541,10 @@ func (s *Server) deletePersonalAccessToken(c *ctx) {
 	if !s.patAllowed(c) {
 		return
 	}
+	if c.device && c.param("token_id") != c.tokenID {
+		jsonMessage(c.w, http.StatusForbidden, "A device token can only revoke itself")
+		return
+	}
 	if !s.st.DeleteToken(c.param("token_id"), c.user.ID) {
 		jsonMessage(c.w, http.StatusNotFound, "not found")
 		return

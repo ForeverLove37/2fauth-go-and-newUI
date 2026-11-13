@@ -33,7 +33,8 @@
 - 图标上传、删除和可配置的图标 provider chain；没有图标的账户会在后台自动获取
 - 通过 SSH 公钥在命令行读取验证码，每个密钥有自己的权限范围，详见 [`docs/SSH.md`](2fauth-go/docs/SSH.md)
 - 给 AI agent 和脚本的接入文档：服务器在 `/agents.md`（同时在 `/llms.txt`）按本实例的真实地址、SSH 端口和主机指纹生成，网页 `/agents` 是给人看的版本
-- 原生 Android 客户端，风格与网页一致，详见 [`2fauth-android/README.md`](2fauth-android/README.md)
+- 原生 Android 应用：离线可用的本机验证码、与服务器同步的验证码，以及只在云端的验证码；主题和卡片样式与网页一致，网页端发布更新、手机自动提示，详见 [`2fauth-android/README.md`](2fauth-android/README.md)
+- 五种卡片样式（经典色条、顶部微光、双层边框、胶囊标签、便当盒），以及未登录访客看到的项目介绍首页
 - React 面板中的列表、网格和 3D 展示模式；验证码默认隐藏，鼠标移上去显示 5 秒，可一键全部显示
 - 主题编辑、语言切换和本地主题配置
 

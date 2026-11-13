@@ -6,6 +6,7 @@ import { useT } from '../i18n'
 import { copyText } from '../lib/format'
 import { inline, parseMarkdown, slug, type Block } from '../lib/markdown'
 import { useStore } from '../store/useStore'
+import Logo from '../components/Logo'
 
 /** Where the server publishes the guide, as an absolute address an agent can fetch. */
 function guideUrl(): string {
@@ -115,7 +116,7 @@ export default function Agents() {
     <div className="doc-page">
       <header className="doc-top">
         <Link to={user ? '/settings?tab=security' : '/login'} className="brand">
-          <div className="brand-mark">2F</div>
+          <Logo />
           <div>
             {t('Agent guide')}
             <small>{t('One-time passwords for AI agents and scripts')}</small>
