@@ -13,6 +13,7 @@ const Dashboard = lazy(() => import('./views/Dashboard'))
 const Settings = lazy(() => import('./views/Settings'))
 const Agents = lazy(() => import('./views/Agents'))
 const Landing = lazy(() => import('./views/Landing'))
+const Legal = lazy(() => import('./views/Legal'))
 
 function Booting() {
   const t = useT()
@@ -116,6 +117,22 @@ export default function App() {
         element={
           <Suspense fallback={<Booting />}>
             <Agents />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/terms"
+        element={
+          <Suspense fallback={<Booting />}>
+            <Legal kind="terms" />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/privacy"
+        element={
+          <Suspense fallback={<Booting />}>
+            <Legal kind="privacy" />
           </Suspense>
         }
       />

@@ -74,6 +74,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.twofauth.android.ui.CopyToast
 import app.twofauth.android.ui.AddScreen
 import app.twofauth.android.ui.Authenticator
 import app.twofauth.android.ui.Backdrop
@@ -184,6 +185,7 @@ class MainActivity : FragmentActivity() {
                             }
                         }
                         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp))
+                        CopyToast(state.copied, Modifier.align(Alignment.TopCenter))
                     }
                     state.update?.let { UpdateDialog(model, it, state.downloading) }
                 }

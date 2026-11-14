@@ -198,6 +198,10 @@ export function Login() {
           </a>
           <span aria-hidden="true">·</span>
           <Link to="/agents">{t('Agents')}</Link>
+          <span aria-hidden="true">·</span>
+          <Link to="/terms">{t('Terms')}</Link>
+          <span aria-hidden="true">·</span>
+          <Link to="/privacy">{t('Privacy')}</Link>
         </p>
       </form>
     </div>

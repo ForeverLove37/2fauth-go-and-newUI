@@ -155,11 +155,7 @@ fun HomeScreen(model: AppModel, state: UiState, accounts: List<LocalAccount>, on
         revealed[account.id] = System.currentTimeMillis() + REVEAL_MS
         flashes[account.id] = (flashes[account.id] ?: 0) + 1
         view.performHapticFeedback(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.KEYBOARD_TAP)
-        val left = account.remaining(System.currentTimeMillis())
-        when {
-            !account.isHotp && left in 1..5 -> model.say(context.getString(R.string.copied_expiring, left))
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU -> model.say(context.getString(R.string.copied))
-        }
+        model.copied(account.label(), if (account.isHotp) null else account.remaining(System.currentTimeMillis()))
     }
 
     fun tap(account: LocalAccount) {

@@ -94,7 +94,7 @@ fun CloudScreen(model: AppModel, state: UiState, onConnect: () -> Unit, onSettin
         revealed[account.id] = System.currentTimeMillis() + REVEAL_MS
         flashes[account.id] = (flashes[account.id] ?: 0) + 1
         view.performHapticFeedback(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.KEYBOARD_TAP)
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) model.say(context.getString(R.string.copied))
+        model.copied(account.service?.ifBlank { null } ?: account.account.orEmpty(), if (account.isHotp) null else account.remainingSeconds(System.currentTimeMillis()))
     }
 
     Backdrop {

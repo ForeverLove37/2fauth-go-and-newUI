@@ -6,6 +6,7 @@ import androidx.biometric.BiometricManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.twofauth.android.data.Account
+import app.twofauth.android.ui.Copied
 import app.twofauth.android.data.AndroidRelease
 import app.twofauth.android.data.Api
 import app.twofauth.android.data.ApiException
@@ -65,6 +66,8 @@ data class UiState(
     val busy: Boolean = false,
     val error: String? = null,
     val message: String? = null,
+    /** the last code copied, for the toast that confirms it */
+    val copied: Copied? = null,
     val certificate: CertificatePrompt? = null,
     val hotp: Map<Long, OtpPayload> = emptyMap(),
     val locked: Boolean = false,
@@ -608,6 +611,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun say(message: String) = _state.update { it.copy(message = message) }
 
     fun consumeMessage() = _state.update { it.copy(message = null) }
+
+    private var copies = 0L
+
+    /** Shows the toast that confirms a copy: the service, and how long the code still lives when that is short. */
+    fun copied(service: String, left: Int?) {
+        val ctx = getApplication<Application>()
+        val expiring = left != null && left in 1..5
+        val detail = if (expiring) ctx.getString(R.string.copied_expiring, left) else ctx.getString(R.string.copied)
+        _state.update { it.copy(copied = Copied(++copies, service, detail, warn = expiring)) }
+    }
 
     fun clearError() = _state.update { it.copy(error = null) }
 

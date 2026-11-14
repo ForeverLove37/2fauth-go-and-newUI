@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The gradient of the dark app icon of 2FAuth. -->
+<!-- The white background of the app icon of 2FAuth. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <gradient android:type="linear" android:angle="315" android:startColor="#FF092753" android:centerColor="#FF134A99" android:endColor="#FF1B2D7F" />
+    <solid android:color="#FFFFFFFF" />
 </shape>
